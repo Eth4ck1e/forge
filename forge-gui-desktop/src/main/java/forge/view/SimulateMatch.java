@@ -181,7 +181,8 @@ public class SimulateMatch {
                 } else {
                     rp = new RegisteredPlayer(d);
                 }
-                rp.setPlayer(GamePlayerUtil.createAiPlayer(name, i - 1, profile));
+                rp.setPlayer(simOptions == null ? GamePlayerUtil.createAiPlayer(name, i - 1, profile)
+                        : GamePlayerUtil.createAiPlayer(name, i - 1, i - 1, simOptions, profile));
                 pp.add(rp);
                 i++;
             }
@@ -199,6 +200,12 @@ public class SimulateMatch {
         exitOnTimeout = params.containsKey("x");
         if (params.containsKey("stop")) {
             stopFile = new File(params.get("stop").get(0));
+        }
+        census = params.containsKey("census");
+        forge.ai.learned.DecisionCensus.enabled = census;
+        if (params.containsKey("sim")) {
+            final String mode = params.get("sim").get(0);
+            simOptions = java.util.EnumSet.of("full".equalsIgnoreCase(mode) ? forge.ai.AIOption.USE_FULL_SIMULATION : forge.ai.AIOption.USE_HYBRID_SIMULATION);
         }
         if (params.containsKey("at")) {
             aiTimeoutSeconds = Integer.parseInt(params.get("at").get(0));
@@ -252,6 +259,8 @@ public class SimulateMatch {
         System.out.println("\tc - Clock flag. Set the maximum time in seconds before calling the match a draw, defaults to 120.");
         System.out.println("\tmc - Flat Monte Carlo AI refinement for this run, on, max or off (default off in simulations; max = desktop strength). Prints timing statistics at the end when on.");
         System.out.println("\tq - Quiet flag. Output just the game result, not the entire game log.");
+        System.out.println("\tcensus - Print a SIMCENSUS json line per game: AI decisions by category and evaluator/simulator calls per category.");
+        System.out.println("\tsim - full|hybrid: use the SpellAbilityPicker simulation mode for every AI seat (independent of -mc).");
         System.out.println("\tstop - Path of a stop file; the run exits before the next game once it exists.");
         System.out.println("\tx - Exit the process (code 3) after a wall-clock timeout; the cancelled game thread cannot be stopped.");
         System.out.println("\tat - Per-decision AI time budget in seconds (default 5).");
@@ -267,6 +276,10 @@ public class SimulateMatch {
     // learned-ai: -stop <file>: before each game, exit (code 0) if this file exists. Lets a batch runner oversubscribe
     // workers and stop dispatching once enough games are done, without cutting any game short.
     private static File stopFile = null;
+    // learned-ai: -census prints a SIMCENSUS json line per game (decision counts by category, evaluator/simulator use)
+    private static boolean census = false;
+    // learned-ai: -sim full|hybrid gives every AI seat the older SpellAbilityPicker simulation mode (AIOption)
+    private static java.util.Set<forge.ai.AIOption> simOptions = null;
 
     private static String jsonStr(final String v) {
         if (v == null) {
@@ -382,6 +395,9 @@ public class SimulateMatch {
             System.out.println("SIMNOTE wall-clock timeout");
         }
         System.out.println(simResultLine(g1, iGame, sw.getTime(), exceptions));
+        if (census) {
+            System.out.println("SIMCENSUS " + forge.ai.learned.DecisionCensus.snapshotJson(true));
+        }
         System.out.flush();
         if (timedOut && exitOnTimeout) {
             // learned-ai: the cancelled game thread keeps running (the engine does not poll interrupts), so the JVM is

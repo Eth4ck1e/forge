@@ -101,6 +101,7 @@ public class GameStateEvaluator {
     }
 
     public Score getScoreForGameState(Game game, Player aiPlayer) {
+        forge.ai.learned.DecisionCensus.evaluatorCall();
         if (!aiPlayer.isInGame()) {
             return getTerminalScore(game, aiPlayer);
         }

@@ -235,6 +235,7 @@ public class GameSimulator {
         return simulateSpellAbility(origSa, this.eval, resolve);
     }
     public Score simulateSpellAbility(SpellAbility origSa, GameStateEvaluator eval, boolean resolve) {
+        forge.ai.learned.DecisionCensus.simulatorCall();
         SpellAbility sa;
         if (origSa.isLandAbility()) {
             Card hostCard = (Card) copier.find(origSa.getHostCard());

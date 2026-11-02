@@ -195,6 +195,15 @@ public class AiAttackController {
         return choosePreferredDefenderPlayer(ai, false);
     }
     public static Player choosePreferredDefenderPlayer(Player ai, boolean forCombatDmg) {
+        forge.ai.learned.DecisionCensus.enter("attack_target");
+        try {
+            return choosePreferredDefenderPlayerImpl(ai, forCombatDmg);
+        } finally {
+            forge.ai.learned.DecisionCensus.exit();
+        }
+    }
+
+    private static Player choosePreferredDefenderPlayerImpl(Player ai, boolean forCombatDmg) {
         PlayerCollection opponents = ai.getOpponents();
         if (opponents.size() < 2) {
             return Iterables.getFirst(opponents, null);
@@ -768,6 +777,7 @@ public class AiAttackController {
     }
 
     private GameEntity chooseDefender(final Combat c, final boolean bAssault) {
+        forge.ai.learned.DecisionCensus.note("chooseDefender");
         final FCollectionView<GameEntity> defs = c.getDefenders();
         if (defs.size() == 1) {
             return defs.getFirst();

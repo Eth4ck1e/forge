@@ -85,6 +85,15 @@ public class PlayerControllerAi extends PlayerController {
 
     @Override
     public SpellAbility getAbilityToPlay(Card hostCard, List<SpellAbility> abilities, ITriggerEvent triggerEvent) {
+        forge.ai.learned.DecisionCensus.enter("spell_choice");
+        try {
+            return census_getAbilityToPlay(hostCard, abilities, triggerEvent);
+        } finally {
+            forge.ai.learned.DecisionCensus.exit();
+        }
+    }
+
+    public SpellAbility census_getAbilityToPlay(Card hostCard, List<SpellAbility> abilities, ITriggerEvent triggerEvent) {
         if (abilities.isEmpty()) {
             return null;
         }
@@ -362,6 +371,15 @@ public class PlayerControllerAi extends PlayerController {
 
     @Override
     public CardCollectionView chooseCardsForEffect(CardCollectionView sourceList, SpellAbility sa, String title, int min, int max, boolean isOptional, Map<String, Object> params) {
+        forge.ai.learned.DecisionCensus.enter("cards_choice");
+        try {
+            return census_chooseCardsForEffect(sourceList, sa, title, min, max, isOptional, params);
+        } finally {
+            forge.ai.learned.DecisionCensus.exit();
+        }
+    }
+
+    public CardCollectionView census_chooseCardsForEffect(CardCollectionView sourceList, SpellAbility sa, String title, int min, int max, boolean isOptional, Map<String, Object> params) {
         return brains.chooseCardsForEffect(sourceList, sa, min, max, isOptional, params);
     }
 
@@ -413,6 +431,15 @@ public class PlayerControllerAi extends PlayerController {
 
     @Override
     public <T extends GameEntity> T chooseSingleEntityForEffect(FCollectionView<T> optionList, DelayedReveal delayedReveal, SpellAbility sa, String title, boolean isOptional, Player targetedPlayer, Map<String, Object> params) {
+        forge.ai.learned.DecisionCensus.enter("targets");
+        try {
+            return census_chooseSingleEntityForEffect(optionList, delayedReveal, sa, title, isOptional, targetedPlayer, params);
+        } finally {
+            forge.ai.learned.DecisionCensus.exit();
+        }
+    }
+
+    public <T extends GameEntity> T census_chooseSingleEntityForEffect(FCollectionView<T> optionList, DelayedReveal delayedReveal, SpellAbility sa, String title, boolean isOptional, Player targetedPlayer, Map<String, Object> params) {
         if (delayedReveal != null) {
             reveal(delayedReveal);
         }
@@ -420,7 +447,16 @@ public class PlayerControllerAi extends PlayerController {
     }
 
     @Override
-    public <T extends GameEntity> List<T> chooseEntitiesForEffect(
+    public <T extends GameEntity> List<T> chooseEntitiesForEffect( FCollectionView<T> optionList, int min, int max, DelayedReveal delayedReveal, SpellAbility sa, String title, Player targetedPlayer, Map<String, Object> params) {
+        forge.ai.learned.DecisionCensus.enter("targets");
+        try {
+            return census_chooseEntitiesForEffect(optionList, min, max, delayedReveal, sa, title, targetedPlayer, params);
+        } finally {
+            forge.ai.learned.DecisionCensus.exit();
+        }
+    }
+
+    public <T extends GameEntity> List<T> census_chooseEntitiesForEffect(
             FCollectionView<T> optionList, int min, int max, DelayedReveal delayedReveal, SpellAbility sa, String title,
             Player targetedPlayer, Map<String, Object> params) {
         if (delayedReveal != null) {
@@ -463,6 +499,15 @@ public class PlayerControllerAi extends PlayerController {
 
     @Override
     public boolean confirmAction(SpellAbility sa, PlayerActionConfirmMode mode, String message, List<String> options, Card cardToShow, Map<String, Object> params) {
+        forge.ai.learned.DecisionCensus.enter("confirm");
+        try {
+            return census_confirmAction(sa, mode, message, options, cardToShow, params);
+        } finally {
+            forge.ai.learned.DecisionCensus.exit();
+        }
+    }
+
+    public boolean census_confirmAction(SpellAbility sa, PlayerActionConfirmMode mode, String message, List<String> options, Card cardToShow, Map<String, Object> params) {
         return getAi().confirmAction(sa, mode, message, params);
     }
 
@@ -484,6 +529,15 @@ public class PlayerControllerAi extends PlayerController {
 
     @Override
     public boolean confirmTrigger(WrappedAbility wrapper) {
+        forge.ai.learned.DecisionCensus.enter("confirm");
+        try {
+            return census_confirmTrigger(wrapper);
+        } finally {
+            forge.ai.learned.DecisionCensus.exit();
+        }
+    }
+
+    public boolean census_confirmTrigger(WrappedAbility wrapper) {
         final SpellAbility sa = wrapper.getWrappedAbility();
         //final Trigger regtrig = wrapper.getTrigger();
         if (wrapper.isMandatory()) {
@@ -743,6 +797,15 @@ public class PlayerControllerAi extends PlayerController {
 
     @Override
     public CardCollection chooseCardsToDiscardFrom(Player p, SpellAbility sa, CardCollection validCards, int min, int max, CardCollectionView visibleToChooser) {
+        forge.ai.learned.DecisionCensus.enter("discard");
+        try {
+            return census_chooseCardsToDiscardFrom(p, sa, validCards, min, max, visibleToChooser);
+        } finally {
+            forge.ai.learned.DecisionCensus.exit();
+        }
+    }
+
+    public CardCollection census_chooseCardsToDiscardFrom(Player p, SpellAbility sa, CardCollection validCards, int min, int max, CardCollectionView visibleToChooser) {
         if (p == player) {
             return brains.getCardsToDiscard(min, max, validCards, sa);
         }
@@ -863,7 +926,16 @@ public class PlayerControllerAi extends PlayerController {
     }
 
     @Override
-    public boolean mulliganKeepHand(Player firstPlayer, int cardsToReturn)  {
+    public boolean mulliganKeepHand(Player firstPlayer, int cardsToReturn) {
+        forge.ai.learned.DecisionCensus.enter("mulligan");
+        try {
+            return census_mulliganKeepHand(firstPlayer, cardsToReturn);
+        } finally {
+            forge.ai.learned.DecisionCensus.exit();
+        }
+    }
+
+    public boolean census_mulliganKeepHand(Player firstPlayer, int cardsToReturn)  {
         if (brains.useSmartMulligan()) {
             try {
                 return OpeningHand.keep(player, player.getCardsIn(ZoneType.Hand), cardsToReturn,
@@ -930,16 +1002,43 @@ public class PlayerControllerAi extends PlayerController {
 
     @Override
     public void declareAttackers(Player attacker, Combat combat) {
+        forge.ai.learned.DecisionCensus.enter("attackers");
+        try {
+            census_declareAttackers(attacker, combat);
+        } finally {
+            forge.ai.learned.DecisionCensus.exit();
+        }
+    }
+
+    public void census_declareAttackers(Player attacker, Combat combat) {
         brains.declareAttackers(attacker, combat);
     }
 
     @Override
     public void declareBlockers(Player defender, Combat combat) {
+        forge.ai.learned.DecisionCensus.enter("blockers");
+        try {
+            census_declareBlockers(defender, combat);
+        } finally {
+            forge.ai.learned.DecisionCensus.exit();
+        }
+    }
+
+    public void census_declareBlockers(Player defender, Combat combat) {
         brains.declareBlockersFor(defender, combat);
     }
 
     @Override
     public List<SpellAbility> chooseSpellAbilityToPlay() {
+        forge.ai.learned.DecisionCensus.enter("spell_choice");
+        try {
+            return census_chooseSpellAbilityToPlay();
+        } finally {
+            forge.ai.learned.DecisionCensus.exit();
+        }
+    }
+
+    public List<SpellAbility> census_chooseSpellAbilityToPlay() {
         return brains.chooseSpellAbilityToPlay();
     }
 
@@ -1031,6 +1130,15 @@ public class PlayerControllerAi extends PlayerController {
 
     @Override
     public CardCollectionView chooseCardsToDiscardToMaximumHandSize(int numDiscard) {
+        forge.ai.learned.DecisionCensus.enter("discard");
+        try {
+            return census_chooseCardsToDiscardToMaximumHandSize(numDiscard);
+        } finally {
+            forge.ai.learned.DecisionCensus.exit();
+        }
+    }
+
+    public CardCollectionView census_chooseCardsToDiscardToMaximumHandSize(int numDiscard) {
         return brains.getCardsToDiscard(numDiscard, null, null);
     }
 
@@ -1068,16 +1176,43 @@ public class PlayerControllerAi extends PlayerController {
 
     @Override
     public int chooseNumber(SpellAbility sa, String title, int min, int max) {
+        forge.ai.learned.DecisionCensus.enter("number");
+        try {
+            return census_chooseNumber(sa, title, min, max);
+        } finally {
+            forge.ai.learned.DecisionCensus.exit();
+        }
+    }
+
+    public int census_chooseNumber(SpellAbility sa, String title, int min, int max) {
         return brains.chooseNumber(sa, title, min, max);
     }
 
     @Override
     public int chooseNumber(SpellAbility sa, String string, int min, int max, Map<String, Object> params) {
+        forge.ai.learned.DecisionCensus.enter("number");
+        try {
+            return census_chooseNumber(sa, string, min, max, params);
+        } finally {
+            forge.ai.learned.DecisionCensus.exit();
+        }
+    }
+
+    public int census_chooseNumber(SpellAbility sa, String string, int min, int max, Map<String, Object> params) {
         return SpellApiToAi.Converter.get(sa).chooseNumber(player, sa, min, max, params);
     }
 
     @Override
     public int chooseNumber(SpellAbility sa, String title, List<Integer> options, Player relatedPlayer) {
+        forge.ai.learned.DecisionCensus.enter("number");
+        try {
+            return census_chooseNumber(sa, title, options, relatedPlayer);
+        } finally {
+            forge.ai.learned.DecisionCensus.exit();
+        }
+    }
+
+    public int census_chooseNumber(SpellAbility sa, String title, List<Integer> options, Player relatedPlayer) {
         return brains.chooseNumber(sa, title, options, relatedPlayer);
     }
 
@@ -1184,6 +1319,15 @@ public class PlayerControllerAi extends PlayerController {
 
     @Override
     public List<AbilitySub> chooseModeForAbility(SpellAbility sa, List<AbilitySub> possible, int min, int num, boolean allowRepeat) {
+        forge.ai.learned.DecisionCensus.enter("modal");
+        try {
+            return census_chooseModeForAbility(sa, possible, min, num, allowRepeat);
+        } finally {
+            forge.ai.learned.DecisionCensus.exit();
+        }
+    }
+
+    public List<AbilitySub> census_chooseModeForAbility(SpellAbility sa, List<AbilitySub> possible, int min, int num, boolean allowRepeat) {
         List<AbilitySub> result = brains.chooseModeForAbility(sa, possible, min, num, allowRepeat);
         if (result != null) {
             return result;
@@ -1393,6 +1537,15 @@ public class PlayerControllerAi extends PlayerController {
 
     @Override
     public boolean payManaCost(ManaCost toPay, CostPartMana costPartMana, SpellAbility sa, String prompt /* ai needs hints as well */, ManaConversionMatrix matrix, boolean effect) {
+        forge.ai.learned.DecisionCensus.enter("mana");
+        try {
+            return census_payManaCost(toPay, costPartMana, sa, String prompt /* ai needs hints as well */, matrix, effect);
+        } finally {
+            forge.ai.learned.DecisionCensus.exit();
+        }
+    }
+
+    public boolean census_payManaCost(ManaCost toPay, CostPartMana costPartMana, SpellAbility sa, String prompt /* ai needs hints as well */, ManaConversionMatrix matrix, boolean effect) {
         return ComputerUtilMana.payManaCost(new Cost(toPay, effect), player, sa, effect);
     }
 
@@ -1443,6 +1596,15 @@ public class PlayerControllerAi extends PlayerController {
 
     @Override
     public List<SpellAbility> orderSimultaneousSa(List<SpellAbility> activePlayerSAs) {
+        forge.ai.learned.DecisionCensus.enter("spell_choice");
+        try {
+            return census_orderSimultaneousSa(activePlayerSAs);
+        } finally {
+            forge.ai.learned.DecisionCensus.exit();
+        }
+    }
+
+    public List<SpellAbility> census_orderSimultaneousSa(List<SpellAbility> activePlayerSAs) {
         return getAi().orderPlaySa(activePlayerSAs);
     }
 
@@ -1565,6 +1727,15 @@ public class PlayerControllerAi extends PlayerController {
 
     @Override
     public boolean chooseTargetsFor(SpellAbility currentAbility) {
+        forge.ai.learned.DecisionCensus.enter("targets");
+        try {
+            return census_chooseTargetsFor(currentAbility);
+        } finally {
+            forge.ai.learned.DecisionCensus.exit();
+        }
+    }
+
+    public boolean census_chooseTargetsFor(SpellAbility currentAbility) {
         return brains.doTrigger(currentAbility, true);
     }
 
@@ -1793,7 +1964,16 @@ public class PlayerControllerAi extends PlayerController {
     }
 
     @Override
-    public Card chooseSingleCardForZoneChange(ZoneType destination,
+    public Card chooseSingleCardForZoneChange(ZoneType destination, List<ZoneType> origin, SpellAbility sa, CardCollection fetchList, DelayedReveal delayedReveal, String selectPrompt, boolean isOptional, Player decider) {
+        forge.ai.learned.DecisionCensus.enter("cards_choice");
+        try {
+            return census_chooseSingleCardForZoneChange(destination, origin, sa, fetchList, delayedReveal, selectPrompt, isOptional, decider);
+        } finally {
+            forge.ai.learned.DecisionCensus.exit();
+        }
+    }
+
+    public Card census_chooseSingleCardForZoneChange(ZoneType destination,
             List<ZoneType> origin, SpellAbility sa, CardCollection fetchList, DelayedReveal delayedReveal,
             String selectPrompt, boolean isOptional, Player decider) {
         if (delayedReveal != null) {
@@ -1868,6 +2048,15 @@ public class PlayerControllerAi extends PlayerController {
 
     @Override
     public List<OptionalCostValue> chooseOptionalCosts(SpellAbility chosen, List<OptionalCostValue> optionalCostValues) {
+        forge.ai.learned.DecisionCensus.enter("modal");
+        try {
+            return census_chooseOptionalCosts(chosen, optionalCostValues);
+        } finally {
+            forge.ai.learned.DecisionCensus.exit();
+        }
+    }
+
+    public List<OptionalCostValue> census_chooseOptionalCosts(SpellAbility chosen, List<OptionalCostValue> optionalCostValues) {
         return SpellApiToAi.Converter.get(chosen).chooseOptionalCosts(player, chosen, optionalCostValues);
     }
 
