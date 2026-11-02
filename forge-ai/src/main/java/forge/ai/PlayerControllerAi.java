@@ -1539,7 +1539,7 @@ public class PlayerControllerAi extends PlayerController {
     public boolean payManaCost(ManaCost toPay, CostPartMana costPartMana, SpellAbility sa, String prompt /* ai needs hints as well */, ManaConversionMatrix matrix, boolean effect) {
         forge.ai.learned.DecisionCensus.enter("mana");
         try {
-            return census_payManaCost(toPay, costPartMana, sa, String prompt /* ai needs hints as well */, matrix, effect);
+            return census_payManaCost(toPay, costPartMana, sa, prompt, matrix, effect);
         } finally {
             forge.ai.learned.DecisionCensus.exit();
         }
