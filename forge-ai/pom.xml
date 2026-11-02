@@ -13,6 +13,12 @@
     <name>Forge AI</name>
 
     <dependencies>
+        <!-- learned-ai M3.2: in-process inference for the learned profile (D16 / F4 option a) -->
+        <dependency>
+            <groupId>com.microsoft.onnxruntime</groupId>
+            <artifactId>onnxruntime</artifactId>
+            <version>1.18.0</version>
+        </dependency>
         <dependency>
             <groupId>forge</groupId>
             <artifactId>forge-core</artifactId>

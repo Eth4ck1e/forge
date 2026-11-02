@@ -220,6 +220,17 @@ public class SimulateMatch {
         if (params.containsKey("at")) {
             aiTimeoutSeconds = Integer.parseInt(params.get("at").get(0));
         }
+        // learned-ai M3: -model <onnx> loads the scorer; seats with the Learned profile (-a Learned,...) then take the
+        // hooked decisions from it, every other seat keeps the stock heuristics
+        if (params.containsKey("model")) {
+            try {
+                learnedScorer = new forge.ai.learned.OnnxScorer(params.get("model").get(0));
+                forge.ai.learned.LearnedHooks.setScorer(learnedScorer);
+                System.out.println("SIMNOTE learned model " + params.get("model").get(0));
+            } catch (Exception e) {
+                throw new RuntimeException("model: " + e, e);
+            }
+        }
 
         sb.append(" - ").append(Lang.nounWithNumeral(nGames, "game")).append(" of ").append(type);
         if (seed != null) {
@@ -302,6 +313,8 @@ public class SimulateMatch {
      * learned-ai: one machine-readable line per finished game, for the evaluation harness. Everything here is read
      * from the finished Game object; nothing in the game is changed.
      */
+    private static forge.ai.learned.OnnxScorer learnedScorer = null;
+
     private static String simResultLine(final Game g, final int iGame, final long durationMs, final int exceptions) {
         final StringBuilder sb = new StringBuilder("SIMRESULT {");
         sb.append("\"game\":").append(iGame + 1);
@@ -410,6 +423,9 @@ public class SimulateMatch {
             System.out.println("SIMCENSUS " + forge.ai.learned.DecisionCensus.snapshotJson(true));
         }
         forge.ai.learned.LearnLog.endGame();
+        if (learnedScorer != null) {
+            System.out.printf("SIMMODEL {\"calls\":%d,\"meanMicros\":%.1f}%n", learnedScorer.calls(), learnedScorer.meanMicros());
+        }
         System.out.flush();
         if (timedOut && exitOnTimeout) {
             // learned-ai: the cancelled game thread keeps running (the engine does not poll interrupts), so the JVM is
