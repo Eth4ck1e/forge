@@ -113,6 +113,12 @@ public class SimulateMatch {
             }
         }
         FlatMonteCarloStats.reset();
+        // learned-ai: must be known before the AI players are created below
+        simOptions = null;
+        if (params.containsKey("sim")) {
+            final String mode = params.get("sim").get(0);
+            simOptions = java.util.EnumSet.of("full".equalsIgnoreCase(mode) ? forge.ai.AIOption.USE_FULL_SIMULATION : forge.ai.AIOption.USE_HYBRID_SIMULATION);
+        }
 
         Long seed = null;
         if (params.containsKey("s")) {
@@ -203,10 +209,6 @@ public class SimulateMatch {
         }
         census = params.containsKey("census");
         forge.ai.learned.DecisionCensus.enabled = census;
-        if (params.containsKey("sim")) {
-            final String mode = params.get("sim").get(0);
-            simOptions = java.util.EnumSet.of("full".equalsIgnoreCase(mode) ? forge.ai.AIOption.USE_FULL_SIMULATION : forge.ai.AIOption.USE_HYBRID_SIMULATION);
-        }
         if (params.containsKey("at")) {
             aiTimeoutSeconds = Integer.parseInt(params.get("at").get(0));
         }
