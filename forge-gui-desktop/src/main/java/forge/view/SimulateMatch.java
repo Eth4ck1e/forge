@@ -197,6 +197,9 @@ public class SimulateMatch {
         }
         lastSeed = seed;
         exitOnTimeout = params.containsKey("x");
+        if (params.containsKey("stop")) {
+            stopFile = new File(params.get("stop").get(0));
+        }
         if (params.containsKey("at")) {
             aiTimeoutSeconds = Integer.parseInt(params.get("at").get(0));
         }
@@ -219,6 +222,10 @@ public class SimulateMatch {
             }
         } else {
             for (int iGame = 0; iGame < nGames; iGame++) {
+                if (stopFile != null && stopFile.exists()) {
+                    System.out.println("SIMNOTE stop file present, exiting after " + iGame + " games");
+                    break;
+                }
                 simulateSingleMatch(mc, iGame, outputGamelog);
             }
         }
@@ -245,6 +252,7 @@ public class SimulateMatch {
         System.out.println("\tc - Clock flag. Set the maximum time in seconds before calling the match a draw, defaults to 120.");
         System.out.println("\tmc - Flat Monte Carlo AI refinement for this run, on, max or off (default off in simulations; max = desktop strength). Prints timing statistics at the end when on.");
         System.out.println("\tq - Quiet flag. Output just the game result, not the entire game log.");
+        System.out.println("\tstop - Path of a stop file; the run exits before the next game once it exists.");
         System.out.println("\tx - Exit the process (code 3) after a wall-clock timeout; the cancelled game thread cannot be stopped.");
         System.out.println("\tat - Per-decision AI time budget in seconds (default 5).");
         System.out.println("\tr - Turn cap in table rounds (rounds * players engine turns); games reaching it are recorded as draws. One SIMRESULT json line is printed per game.");
@@ -256,6 +264,9 @@ public class SimulateMatch {
     private static boolean exitOnTimeout = false;
     // learned-ai: -at <seconds> overrides the per-decision AI budget (Game.AI_TIMEOUT, default 5)
     private static Integer aiTimeoutSeconds = null;
+    // learned-ai: -stop <file>: before each game, exit (code 0) if this file exists. Lets a batch runner oversubscribe
+    // workers and stop dispatching once enough games are done, without cutting any game short.
+    private static File stopFile = null;
 
     private static String jsonStr(final String v) {
         if (v == null) {
