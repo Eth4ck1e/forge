@@ -196,6 +196,10 @@ public class SimulateMatch {
             rules.setTurnCap(rounds * pp.size());
         }
         lastSeed = seed;
+        exitOnTimeout = params.containsKey("x");
+        if (params.containsKey("at")) {
+            aiTimeoutSeconds = Integer.parseInt(params.get("at").get(0));
+        }
 
         sb.append(" - ").append(Lang.nounWithNumeral(nGames, "game")).append(" of ").append(type);
         if (seed != null) {
@@ -241,11 +245,17 @@ public class SimulateMatch {
         System.out.println("\tc - Clock flag. Set the maximum time in seconds before calling the match a draw, defaults to 120.");
         System.out.println("\tmc - Flat Monte Carlo AI refinement for this run, on, max or off (default off in simulations; max = desktop strength). Prints timing statistics at the end when on.");
         System.out.println("\tq - Quiet flag. Output just the game result, not the entire game log.");
+        System.out.println("\tx - Exit the process (code 3) after a wall-clock timeout; the cancelled game thread cannot be stopped.");
+        System.out.println("\tat - Per-decision AI time budget in seconds (default 5).");
         System.out.println("\tr - Turn cap in table rounds (rounds * players engine turns); games reaching it are recorded as draws. One SIMRESULT json line is printed per game.");
     }
 
     // learned-ai: run seed, echoed into every SIMRESULT line
     private static Long lastSeed = null;
+    // learned-ai: -x makes the process exit (code 3) after a wall-clock timeout instead of continuing with a runaway thread
+    private static boolean exitOnTimeout = false;
+    // learned-ai: -at <seconds> overrides the per-decision AI budget (Game.AI_TIMEOUT, default 5)
+    private static Integer aiTimeoutSeconds = null;
 
     private static String jsonStr(final String v) {
         if (v == null) {
@@ -303,6 +313,9 @@ public class SimulateMatch {
 
         final Game g1 = mc.createGame();
         g1.setNoGUIUser();
+        if (aiTimeoutSeconds != null) {
+            g1.AI_TIMEOUT = aiTimeoutSeconds;
+        }
         if (flatMonteCarlo != null) {
             g1.AI_FLAT_MONTE_CARLO = flatMonteCarlo;
             g1.AI_FLAT_MONTE_CARLO_MAX = Boolean.TRUE.equals(flatMonteCarloMax);
@@ -324,6 +337,15 @@ public class SimulateMatch {
         } finally {
             if (sw.isStarted()) {
                 sw.stop();
+            }
+            // learned-ai: a game cut short by the wall clock or an exception is a draw for everyone still in it;
+            // without this the survivors are scored as winners by Player.onGameOver()
+            if (!g1.isGameOver()) {
+                for (final forge.game.player.Player p : g1.getPlayers()) {
+                    if (p.getOutcome() == null) {
+                        p.intentionalDraw();
+                    }
+                }
             }
             g1.setGameOver(GameEndReason.Draw);
         }
@@ -350,6 +372,13 @@ public class SimulateMatch {
         }
         System.out.println(simResultLine(g1, iGame, sw.getTime(), exceptions));
         System.out.flush();
+        if (timedOut && exitOnTimeout) {
+            // learned-ai: the cancelled game thread keeps running (the engine does not poll interrupts), so the JVM is
+            // no longer trustworthy for further games. Exit with a distinct code; the batch runner restarts the worker.
+            System.out.println("SIMNOTE exiting after wall-clock timeout (code 3)");
+            System.out.flush();
+            System.exit(3);
+        }
     }
 
     private static void simulateTournament(Map<String, List<String>> params, GameRules rules, boolean outputGamelog) {
