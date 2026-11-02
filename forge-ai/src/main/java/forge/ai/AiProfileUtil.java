@@ -104,10 +104,19 @@ public class AiProfileUtil {
 
             final String[] split = line.split("=");
 
+            // learned-ai: a profile may carry properties this build does not know (a newer profile file next to an
+            // older jar); skip them instead of failing the whole application at startup
+            final AiProps key;
+            try {
+                key = AiProps.valueOf(split[0].trim());
+            } catch (IllegalArgumentException e) {
+                System.err.println("AI profile " + profileName + ": unknown property " + split[0].trim() + " ignored");
+                continue;
+            }
             if (split.length == 2) {
-                profileMap.put(AiProps.valueOf(split[0]), split[1]);
+                profileMap.put(key, split[1]);
             } else if (split.length == 1 && line.endsWith("=")) {
-                profileMap.put(AiProps.valueOf(split[0]), "");
+                profileMap.put(key, "");
             }
         }
 
