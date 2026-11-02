@@ -209,6 +209,14 @@ public class SimulateMatch {
         }
         census = params.containsKey("census");
         forge.ai.learned.DecisionCensus.enabled = census;
+        // learned-ai M1: -learnlog <dir> writes one gzip JSON-lines decision log per sim process
+        if (params.containsKey("learnlog")) {
+            try {
+                forge.ai.learned.LearnLog.open(new File(params.get("learnlog").get(0)), seed == null ? 0L : seed.longValue());
+            } catch (java.io.IOException e) {
+                throw new RuntimeException("learnlog: " + e, e);
+            }
+        }
         if (params.containsKey("at")) {
             aiTimeoutSeconds = Integer.parseInt(params.get("at").get(0));
         }
@@ -349,6 +357,7 @@ public class SimulateMatch {
         int exceptions = 0;
         boolean timedOut = false;
         // will run match in the same thread
+        forge.ai.learned.LearnLog.beginGame(iGame + 1);   // SIMRESULT numbers games from 1
         try {
             TimeLimitedCodeBlock.runWithTimeout(() -> {
                 mc.startGame(g1);
@@ -400,6 +409,7 @@ public class SimulateMatch {
         if (census) {
             System.out.println("SIMCENSUS " + forge.ai.learned.DecisionCensus.snapshotJson(true));
         }
+        forge.ai.learned.LearnLog.endGame();
         System.out.flush();
         if (timedOut && exitOnTimeout) {
             // learned-ai: the cancelled game thread keeps running (the engine does not poll interrupts), so the JVM is

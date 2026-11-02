@@ -237,9 +237,18 @@ public class AiAttackController {
         }
         // round away slightly so a single land drop doesn't mean players with earlier turn order are predictably attacked
         // grows with game age since by then threat ranges become less narrow
+        final Map<Player, Integer> allScores = Maps.newHashMap(threatScores);
         int threatLimit = Collections.max(threatScores.values()) - 10 - ai.getGame().getPhaseHandler().getTurn();
         threatScores.values().removeIf(e -> e < threatLimit);
-        return Aggregates.random(threatScores.keySet());
+        final Player stock = Aggregates.random(threatScores.keySet());
+        if (forCombatDmg) {
+            // learned-ai H2 (D16): logs the decision while attackers are being declared; takes it when the profile says so
+            final Player learned = forge.ai.learned.LearnedHooks.attackTarget(ai, new ArrayList<>(opponents), allScores, stock);
+            if (learned != null) {
+                return learned;
+            }
+        }
+        return stock;
     }
 
     public static List<Card> sortAttackers(final List<Card> in) {

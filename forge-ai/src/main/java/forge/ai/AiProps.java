@@ -162,6 +162,10 @@ public enum AiProps {
     FLAT_MC_RISK_WEIGHT("100"),
     FLAT_MC_OVERRIDE_MAJORITY("50"),
     FLAT_MC_ENABLED("true"),
+    // learned-ai (D16): hooks that let a learned model take decisions; off in every stock profile
+    LEARNED_HOOKS("false"),
+    LEARNED_ATTACK_TARGET("false"),
+    LEARNED_MODEL(""),
     // Sampling efficiency and deck-agnostic valuation. Setting PRUNING/CATEGORY_HOLD/ADAPTIVE_PLAYOUT to false and
     // EXTRA_ROUNDS to 0 reproduces the original flat Monte Carlo, which is what the A/B benchmark uses as baseline.
     FLAT_MC_EXTRA_ROUNDS("2"),

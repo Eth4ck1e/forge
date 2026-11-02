@@ -1521,7 +1521,14 @@ public class AiController {
             return;
         }
         // 12/2/10(sol) the decision making here has moved to getAttackers()
-        final AiAttackController aiAtk = new AiAttackController(attacker);
+        // learned-ai H2: the defender chosen in this constructor is the real attack-target decision of this combat
+        forge.ai.learned.LearnedHooks.beginDeclare(attacker);
+        final AiAttackController aiAtk;
+        try {
+            aiAtk = new AiAttackController(attacker);
+        } finally {
+            forge.ai.learned.LearnedHooks.endDeclare();
+        }
         final long id = AITimeoutTracker.key(game.getId(), player.getId());
         final long timeoutNanos = TimeUnit.SECONDS.toNanos(game.getAITimeout());
         AITimeoutTracker.begin(id, timeoutNanos);
