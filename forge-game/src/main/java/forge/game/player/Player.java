@@ -2006,6 +2006,9 @@ public class Player extends GameEntity implements Comparable<Player> {
             }
         }
         setOutcome(PlayerOutcome.loss(state, spellName));
+        // learned-ai: explicit elimination event so multiplayer elimination order is recoverable from the log
+        game.getGameLog().add(GameLogEntryType.ELIMINATION, getName() + " eliminated on turn " + outcomeTurn
+                + " (" + state + (spellName == null || spellName.isEmpty() ? "" : ": " + spellName) + ")");
         return true;
     }
 
@@ -2424,8 +2427,18 @@ public class Player extends GameEntity implements Comparable<Player> {
     public final PlayerOutcome getOutcome() {
         return stats.getOutcome();
     }
+    // learned-ai: engine turn number at which this player's outcome was decided (0 = still playing)
+    private int outcomeTurn = 0;
+
+    public final int getOutcomeTurn() {
+        return outcomeTurn;
+    }
+
     private void setOutcome(PlayerOutcome outcome) {
         stats.setOutcome(outcome);
+        if (outcome != null && outcomeTurn == 0 && game.getPhaseHandler() != null) {
+            outcomeTurn = game.getPhaseHandler().getTurn();
+        }
     }
 
     public void onGameOver() {

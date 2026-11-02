@@ -2,6 +2,7 @@ package forge.game;
 
 public enum GameLogEntryType {
     GAME_OUTCOME("Game Outcome"),
+    ELIMINATION("Elimination"), // learned-ai: a player left the game (turn and reason)
     MATCH_RESULTS("Match Result"),
     SIDEBOARD("Sideboard"),
     TURN("Turn"),

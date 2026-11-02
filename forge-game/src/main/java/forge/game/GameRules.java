@@ -18,6 +18,8 @@ public class GameRules {
     private boolean allowCheatShuffle = false;
     private final Set<GameType> appliedVariants = EnumSet.noneOf(GameType.class);
     private int simTimeout = 120;
+    // learned-ai: engine turn (player-turn) number after which the game is declared a draw; 0 = no cap
+    private int turnCap = 0;
 
     // it's a preference, not rule... but I could hardly find a better place for it
     private boolean useGrayText;
@@ -140,6 +142,14 @@ public class GameRules {
     }
     public void setWarnAboutAICards(final boolean warnAboutAICards) {
         this.warnAboutAICards = warnAboutAICards;
+    }
+
+    public int getTurnCap() {
+        return this.turnCap;
+    }
+
+    public void setTurnCap(final int cap) {
+        this.turnCap = cap;
     }
 
     public int getSimTimeout() {

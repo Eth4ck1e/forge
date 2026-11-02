@@ -189,6 +189,21 @@ public class PhaseHandler implements java.io.Serializable, IHasForgeLog {
 
                 final int lands = CardLists.count(playerTurn.getLandsInPlay(), CardPredicates.UNTAPPED);
                 playerTurn.setNumPowerSurgeLands(lands);
+
+                // learned-ai: optional turn cap (GameRules.turnCap, in engine player-turns). Games that reach it
+                // are recorded as draws so that stalled multiplayer games are counted rather than run forever.
+                final int turnCap = game.getRules().getTurnCap();
+                if (turnCap > 0 && turn > turnCap && !game.isGameOver()) {
+                    game.getGameLog().add(GameLogEntryType.GAME_OUTCOME,
+                            "Turn cap reached: turn " + turn + " exceeds cap " + turnCap + "; game recorded as a draw");
+                    for (final Player p : game.getPlayers()) {
+                        if (p.getOutcome() == null) {
+                            p.intentionalDraw();
+                        }
+                    }
+                    game.setGameOver(GameEndReason.Draw);
+                    return;
+                }
             }
 
             final Map<AbilityKey, Object> repRunParams = AbilityKey.mapFromAffected(playerTurn);

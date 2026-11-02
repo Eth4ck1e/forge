@@ -190,6 +190,12 @@ public class SimulateMatch {
         if (params.containsKey("c")) {
             rules.setSimTimeout(Integer.parseInt(params.get("c").get(0)));
         }
+        // learned-ai: -r caps the game at R table rounds (R * number of players engine turns); capped games are draws
+        if (params.containsKey("r")) {
+            int rounds = Integer.parseInt(params.get("r").get(0));
+            rules.setTurnCap(rounds * pp.size());
+        }
+        lastSeed = seed;
 
         sb.append(" - ").append(Lang.nounWithNumeral(nGames, "game")).append(" of ").append(type);
         if (seed != null) {
@@ -235,6 +241,60 @@ public class SimulateMatch {
         System.out.println("\tc - Clock flag. Set the maximum time in seconds before calling the match a draw, defaults to 120.");
         System.out.println("\tmc - Flat Monte Carlo AI refinement for this run, on, max or off (default off in simulations; max = desktop strength). Prints timing statistics at the end when on.");
         System.out.println("\tq - Quiet flag. Output just the game result, not the entire game log.");
+        System.out.println("\tr - Turn cap in table rounds (rounds * players engine turns); games reaching it are recorded as draws. One SIMRESULT json line is printed per game.");
+    }
+
+    // learned-ai: run seed, echoed into every SIMRESULT line
+    private static Long lastSeed = null;
+
+    private static String jsonStr(final String v) {
+        if (v == null) {
+            return "null";
+        }
+        return "\"" + v.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", " ") + "\"";
+    }
+
+    /**
+     * learned-ai: one machine-readable line per finished game, for the evaluation harness. Everything here is read
+     * from the finished Game object; nothing in the game is changed.
+     */
+    private static String simResultLine(final Game g, final int iGame, final long durationMs, final int exceptions) {
+        final StringBuilder sb = new StringBuilder("SIMRESULT {");
+        sb.append("\"game\":").append(iGame + 1);
+        sb.append(",\"seed\":").append(lastSeed == null ? "null" : lastSeed.toString());
+        final int turns = g.getPhaseHandler() == null ? 0 : g.getPhaseHandler().getTurn();
+        final int cap = g.getRules().getTurnCap();
+        sb.append(",\"turns\":").append(turns);
+        sb.append(",\"turnCap\":").append(cap);
+        sb.append(",\"capped\":").append(cap > 0 && turns > cap);
+        sb.append(",\"durationMs\":").append(durationMs);
+        sb.append(",\"exceptions\":").append(exceptions);
+        final forge.game.GameOutcome outcome = g.getOutcome();
+        sb.append(",\"endReason\":").append(outcome == null ? "null" : jsonStr(String.valueOf(outcome.getWinCondition())));
+        sb.append(",\"draw\":").append(outcome != null && outcome.isDraw());
+        sb.append(",\"players\":[");
+        int seat = 0;
+        for (final forge.game.player.Player p : g.getRegisteredPlayers()) {
+            if (seat > 0) {
+                sb.append(',');
+            }
+            final forge.game.player.PlayerOutcome po = p.getOutcome();
+            final String result = po == null ? "unknown" : po.hasWon() ? "win"
+                    : po.lossState == forge.game.player.GameLossReason.IntentionalDraw ? "draw" : "loss";
+            sb.append('{');
+            sb.append("\"seat\":").append(seat + 1);
+            sb.append(",\"name\":").append(jsonStr(p.getName()));
+            final Deck d = p.getRegisteredPlayer() == null ? null : p.getRegisteredPlayer().getDeck();
+            sb.append(",\"deck\":").append(jsonStr(d == null ? null : d.getName()));
+            sb.append(",\"result\":").append(jsonStr(result));
+            sb.append(",\"reason\":").append(po == null || po.lossState == null ? "null" : jsonStr(po.lossState.name()));
+            sb.append(",\"turn\":").append(p.getOutcomeTurn());
+            sb.append(",\"life\":").append(p.getLife());
+            sb.append('}');
+            seat++;
+        }
+        sb.append("]}");
+        return sb.toString();
     }
 
     public static void simulateSingleMatch(final Match mc, int iGame, boolean outputGamelog) {
@@ -247,6 +307,8 @@ public class SimulateMatch {
             g1.AI_FLAT_MONTE_CARLO = flatMonteCarlo;
             g1.AI_FLAT_MONTE_CARLO_MAX = Boolean.TRUE.equals(flatMonteCarloMax);
         }
+        int exceptions = 0;
+        boolean timedOut = false;
         // will run match in the same thread
         try {
             TimeLimitedCodeBlock.runWithTimeout(() -> {
@@ -255,8 +317,10 @@ public class SimulateMatch {
             }, mc.getRules().getSimTimeout(), TimeUnit.SECONDS);
         } catch (TimeoutException e) {
             System.out.println("Stopping slow match as draw");
+            timedOut = true;
         } catch (Exception | StackOverflowError e) {
             e.printStackTrace();
+            exceptions++;
         } finally {
             if (sw.isStarted()) {
                 sw.stop();
@@ -281,6 +345,11 @@ public class SimulateMatch {
         } else {
             System.out.printf("\nGame Result: Game %d ended in %d ms. %s has won!\n%n", 1 + iGame, sw.getTime(), g1.getOutcome().getWinningLobbyPlayer().getName());
         }
+        if (timedOut) {
+            System.out.println("SIMNOTE wall-clock timeout");
+        }
+        System.out.println(simResultLine(g1, iGame, sw.getTime(), exceptions));
+        System.out.flush();
     }
 
     private static void simulateTournament(Map<String, List<String>> params, GameRules rules, boolean outputGamelog) {
