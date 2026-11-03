@@ -227,6 +227,10 @@ public class SimulateMatch {
             forge.ai.learned.LearnedHooks.exploreRate = Double.parseDouble(params.get("explore").get(0));
             System.out.println("SIMNOTE explore rate " + forge.ai.learned.LearnedHooks.exploreRate);
         }
+        if (params.containsKey("margin")) {
+            forge.ai.learned.LearnedHooks.margin = Float.parseFloat(params.get("margin").get(0));
+            System.out.println("SIMNOTE learned margin " + forge.ai.learned.LearnedHooks.margin);
+        }
         if (params.containsKey("model")) {
             try {
                 final String modelPath = params.get("model").get(0);

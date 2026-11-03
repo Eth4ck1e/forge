@@ -35,6 +35,8 @@ public final class LearnedHooks {
      * the propensity 1/n. Zero in evaluation runs.
      */
     public static volatile double exploreRate = 0.0;
+    /** Conservative override: the learned pick replaces the stock pick only when its score beats the stock pick's by this much. */
+    public static volatile float margin = 0.0f;
     private static final ThreadLocal<Player> DECLARING = new ThreadLocal<>();
 
     private LearnedHooks() {}
@@ -75,7 +77,9 @@ public final class LearnedHooks {
         int chosen = stockIdx;
         if (learned) {
             float[] s = scorer.score(x, xa);
-            for (int i = 0; i < s.length; i++) if (chosen < 0 || s[i] > s[chosen]) chosen = i;
+            int best = -1;
+            for (int i = 0; i < s.length; i++) if (best < 0 || s[i] > s[best]) best = i;
+            if (best >= 0 && (stockIdx < 0 || s[best] - s[stockIdx] > margin)) chosen = best;
         } else if (explore) {
             chosen = forge.util.MyRandom.getRandom().nextInt(opponents.size());
         }
