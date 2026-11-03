@@ -29,6 +29,12 @@ public final class LearnedHooks {
     }
 
     private static volatile Scorer scorer;
+    /**
+     * Exploration for data generation (M4 off-policy fix): with this probability a stock-piloted seat attacks a
+     * uniformly random candidate instead of the stock rule's pick, and the record is logged with pilot "explore" and
+     * the propensity 1/n. Zero in evaluation runs.
+     */
+    public static volatile double exploreRate = 0.0;
     private static final ThreadLocal<Player> DECLARING = new ThreadLocal<>();
 
     private LearnedHooks() {}
@@ -52,7 +58,8 @@ public final class LearnedHooks {
     public static Player attackTarget(Player ai, List<Player> opponents, Map<Player, Integer> threat, Player stock) {
         boolean declaring = DECLARING.get() == ai;
         boolean learned = hookOn(ai, AiProps.LEARNED_ATTACK_TARGET) && scorer != null;
-        if (!declaring || (!LearnLog.enabled() && !learned) || opponents.size() < 2) return null;
+        boolean explore = declaring && !learned && exploreRate > 0 && forge.util.MyRandom.getRandom().nextDouble() < exploreRate;
+        if (!declaring || (!LearnLog.enabled() && !learned && !explore) || opponents.size() < 2) return null;
 
         List<Player> seats = Features.seatsFrom(ai);
         float[] x = Features.state(ai);
@@ -69,15 +76,17 @@ public final class LearnedHooks {
         if (learned) {
             float[] s = scorer.score(x, xa);
             for (int i = 0; i < s.length; i++) if (chosen < 0 || s[i] > s[chosen]) chosen = i;
+        } else if (explore) {
+            chosen = forge.util.MyRandom.getRandom().nextInt(opponents.size());
         }
         if (LearnLog.enabled()) {
             int[] abs = new int[seats.size()];
             for (int i = 0; i < seats.size(); i++) abs[i] = seatNumber(seats.get(i));
             PhaseType ph = ai.getGame().getPhaseHandler().getPhase();
             LearnLog.decision(ATTACK_TARGET, seatNumber(ai), ai.getGame().getPhaseHandler().getTurn(), ph == null ? 0 : ph.ordinal(),
-                    abs, cands, chosen, stockIdx, learned ? "learned" : "stock", x, xa);
+                    abs, cands, chosen, stockIdx, learned ? "learned" : (explore ? "explore" : "stock"), x, xa);
         }
-        return learned && chosen >= 0 ? opponents.get(chosen) : null;
+        return (learned || explore) && chosen >= 0 ? opponents.get(chosen) : null;
     }
 
     /** 1-based seat number as used in SIMRESULT (registration order). */

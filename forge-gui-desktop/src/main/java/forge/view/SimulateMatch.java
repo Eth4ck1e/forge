@@ -222,6 +222,11 @@ public class SimulateMatch {
         }
         // learned-ai M3: -model <onnx> loads the scorer; seats with the Learned profile (-a Learned,...) then take the
         // hooked decisions from it, every other seat keeps the stock heuristics
+        // learned-ai M4: -explore <rate> makes stock seats attack a random opponent with that probability (data generation only)
+        if (params.containsKey("explore")) {
+            forge.ai.learned.LearnedHooks.exploreRate = Double.parseDouble(params.get("explore").get(0));
+            System.out.println("SIMNOTE explore rate " + forge.ai.learned.LearnedHooks.exploreRate);
+        }
         if (params.containsKey("model")) {
             try {
                 learnedScorer = new forge.ai.learned.OnnxScorer(params.get("model").get(0));
