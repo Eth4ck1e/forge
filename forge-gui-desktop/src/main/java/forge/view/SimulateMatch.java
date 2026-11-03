@@ -234,7 +234,7 @@ public class SimulateMatch {
                     // diagnostic: Learned seats pick a uniformly random candidate (calibrates offline policy evaluation)
                     forge.ai.learned.LearnedHooks.setScorer((x, xa) -> {
                         final float[] r = new float[xa.length];
-                        for (int i = 0; i < r.length; i++) r[i] = forge.util.MyRandom.getRandom().nextFloat();
+                        for (int k = 0; k < r.length; k++) r[k] = forge.util.MyRandom.getRandom().nextFloat();
                         return r;
                     });
                     System.out.println("SIMNOTE learned model random");
