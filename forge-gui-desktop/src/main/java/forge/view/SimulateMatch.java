@@ -229,9 +229,20 @@ public class SimulateMatch {
         }
         if (params.containsKey("model")) {
             try {
-                learnedScorer = new forge.ai.learned.OnnxScorer(params.get("model").get(0));
+                final String modelPath = params.get("model").get(0);
+                if ("random".equals(modelPath)) {
+                    // diagnostic: Learned seats pick a uniformly random candidate (calibrates offline policy evaluation)
+                    forge.ai.learned.LearnedHooks.setScorer((x, xa) -> {
+                        final float[] r = new float[xa.length];
+                        for (int i = 0; i < r.length; i++) r[i] = forge.util.MyRandom.getRandom().nextFloat();
+                        return r;
+                    });
+                    System.out.println("SIMNOTE learned model random");
+                } else {
+                learnedScorer = new forge.ai.learned.OnnxScorer(modelPath);
                 forge.ai.learned.LearnedHooks.setScorer(learnedScorer);
-                System.out.println("SIMNOTE learned model " + params.get("model").get(0));
+                System.out.println("SIMNOTE learned model " + modelPath);
+                }
             } catch (Exception e) {
                 throw new RuntimeException("model: " + e, e);
             }
