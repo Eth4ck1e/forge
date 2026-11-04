@@ -227,25 +227,33 @@ public class SimulateMatch {
             forge.ai.learned.LearnedHooks.exploreRate = Double.parseDouble(params.get("explore").get(0));
             System.out.println("SIMNOTE explore rate " + forge.ai.learned.LearnedHooks.exploreRate);
         }
+        if (params.containsKey("spellcands")) {
+            forge.ai.learned.LearnedHooks.spellCandidates = Integer.parseInt(params.get("spellcands").get(0));
+        }
         if (params.containsKey("margin")) {
             forge.ai.learned.LearnedHooks.margin = Float.parseFloat(params.get("margin").get(0));
             System.out.println("SIMNOTE learned margin " + forge.ai.learned.LearnedHooks.margin);
         }
         if (params.containsKey("model")) {
             try {
-                final String modelPath = params.get("model").get(0);
-                if ("random".equals(modelPath)) {
-                    // diagnostic: Learned seats pick a uniformly random candidate (calibrates offline policy evaluation)
-                    forge.ai.learned.LearnedHooks.setScorer((x, xa) -> {
-                        final float[] r = new float[xa.length];
-                        for (int k = 0; k < r.length; k++) r[k] = forge.util.MyRandom.getRandom().nextFloat();
-                        return r;
-                    });
-                    System.out.println("SIMNOTE learned model random");
-                } else {
-                learnedScorer = new forge.ai.learned.OnnxScorer(modelPath);
-                forge.ai.learned.LearnedHooks.setScorer(learnedScorer);
-                System.out.println("SIMNOTE learned model " + modelPath);
+                for (final String spec : params.get("model")) {
+                    // "<hook>=<path>" or "<hook>=random"; a bare path means attack_target (the first hook)
+                    final int eq = spec.indexOf('=');
+                    final String hook = eq < 0 ? forge.ai.learned.LearnedHooks.ATTACK_TARGET : spec.substring(0, eq);
+                    final String modelPath = eq < 0 ? spec : spec.substring(eq + 1);
+                    if ("random".equals(modelPath)) {
+                        // diagnostic: Learned seats pick a uniformly random candidate (calibrates offline policy evaluation)
+                        forge.ai.learned.LearnedHooks.setScorer(hook, (x, xa) -> {
+                            final float[] r = new float[xa.length];
+                            for (int k = 0; k < r.length; k++) r[k] = forge.util.MyRandom.getRandom().nextFloat();
+                            return r;
+                        });
+                        System.out.println("SIMNOTE learned model " + hook + " random");
+                    } else {
+                        learnedScorer = new forge.ai.learned.OnnxScorer(modelPath);
+                        forge.ai.learned.LearnedHooks.setScorer(hook, learnedScorer);
+                        System.out.println("SIMNOTE learned model " + hook + " " + modelPath);
+                    }
                 }
             } catch (Exception e) {
                 throw new RuntimeException("model: " + e, e);

@@ -165,6 +165,7 @@ public enum AiProps {
     // learned-ai (D16): hooks that let a learned model take decisions; off in every stock profile
     LEARNED_HOOKS("false"),
     LEARNED_ATTACK_TARGET("false"),
+    LEARNED_SPELL_CHOICE("false"),
     LEARNED_MODEL(""),
     // Sampling efficiency and deck-agnostic valuation. Setting PRUNING/CATEGORY_HOLD/ADAPTIVE_PLAYOUT to false and
     // EXTRA_ROUNDS to 0 reproduces the original flat Monte Carlo, which is what the A/B benchmark uses as baseline.

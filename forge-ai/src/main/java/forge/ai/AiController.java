@@ -1959,6 +1959,11 @@ public class AiController {
                 FlatMonteCarloStats.noteFailure("controller: " + e);
                 chosenSa = approved.isEmpty() ? null : approved.get(0);
             }
+        } else if (forge.ai.learned.LearnedHooks.spellChoiceActive(player)) {
+            // learned-ai H1 (D16/D17): collect the first few plays the heuristics approve (the first is the stock choice)
+            // and let the hook log them, explore, or score them with the learned model; null means pass
+            final List<SpellAbility> approved = chooseSpellAbilitiesToPlayFromList(saList, true, forge.ai.learned.LearnedHooks.spellCandidates);
+            chosenSa = forge.ai.learned.LearnedHooks.spellChoice(player, approved);
         } else {
             chosenSa = chooseSpellAbilityToPlayFromList(saList, true);
         }

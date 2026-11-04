@@ -23,7 +23,7 @@ import forge.game.zone.ZoneType;
  * Card identity enters only through types, keywords and costs in v0; a role map is a later schema version.
  */
 public final class Features {
-    public static final int SCHEMA = 1;
+    public static final int SCHEMA = 2;
     public static final int SEATS = 4;
     /** Creature slots per seat, best first by power. */
     public static final int CREATURE_SLOTS = 6;
@@ -188,6 +188,81 @@ public final class Features {
         a[6] = cand.getLife() == hi ? 1 : 0;
         a[7] = stockThreat;
         a[8] = stockPick ? 1 : 0;
+        return a;
+    }
+
+    // ---- H1 spell choice ------------------------------------------------------------------------------------------
+
+    /** Ability API families, one bin each; the last bin is "other". */
+    private static final String[][] API_BINS = {
+            {"PermanentCreature"}, {"PermanentNoncreature"}, {"DealDamage", "DamageAll", "EachDamage"}, {"Destroy", "DestroyAll"},
+            {"Counter"}, {"Draw", "Dig", "DigUntil", "DigMultiple"}, {"Pump", "PumpAll"}, {"Token"}, {"ChangeZone", "ChangeZoneAll"},
+            {"GainLife"}, {"LoseLife", "Poison"}, {"Mana", "ManaReflected"}, {"Attach"}, {"Animate", "AnimateAll"}, {"Discard"},
+            {"Mill"}, {"PutCounter", "PutCounterAll", "Proliferate"}, {"Tap", "TapAll"}, {"Untap", "UntapAll"}, {"Fight"},
+            {"Sacrifice", "SacrificeAll"}, {"Debuff"}, {"Effect"}, {"Play"}, {"Protection", "ProtectionAll"}, {"Charm", "GenericChoice"}};
+    private static final java.util.Map<String, Integer> API_BIN = new java.util.HashMap<>();
+    static { for (int b = 0; b < API_BINS.length; b++) for (String n : API_BINS[b]) API_BIN.put(n, b); }
+
+    private static final String[] SPELL_FIXED = {"isPass", "rank", "isStockPick", "isSpell", "isActivated", "isPwAbility", "isCycling",
+            "cardCreature", "cardInstant", "cardSorcery", "cardArtifact", "cardEnchantment", "cardPlaneswalker", "cardLegendary", "cardCommander",
+            "cmc", "power", "toughness", "flying", "trample", "deathtouch", "lifelink", "menace", "haste", "vigilance", "hexproof",
+            "costMana", "costTap", "costSac", "costLife", "costDiscard", "manaLeft",
+            "tgtSeatRel0", "tgtSeatRel1", "tgtSeatRel2", "tgtSeatRel3", "tgtOwnCard", "tgtOppCard", "tgtCardPower",
+            "fromHand", "fromBattlefield", "fromGraveyard", "fromCommand"};
+    public static final String[] SPELL_CANDIDATE;
+    static {
+        SPELL_CANDIDATE = new String[SPELL_FIXED.length + API_BINS.length + 1];
+        System.arraycopy(SPELL_FIXED, 0, SPELL_CANDIDATE, 0, SPELL_FIXED.length);
+        for (int b = 0; b < API_BINS.length; b++) SPELL_CANDIDATE[SPELL_FIXED.length + b] = "api." + API_BINS[b][0];
+        SPELL_CANDIDATE[SPELL_CANDIDATE.length - 1] = "api.other";
+    }
+
+    /** The "pass priority" candidate of a spell-choice decision. */
+    public static float[] passCandidate(int rank, int manaAvail) {
+        float[] a = new float[SPELL_CANDIDATE.length];
+        a[0] = 1; a[1] = rank; a[31] = manaAvail;
+        return a;
+    }
+
+    /**
+     * One approved play. {@code rank} is its position in the heuristics' order (0 = the stock AI's choice);
+     * {@code manaAvail} the acting player's available-mana estimate before paying.
+     */
+    public static float[] spellCandidate(Player acting, forge.game.spellability.SpellAbility sa, int rank, boolean stockPick,
+                                         List<Player> seats, int manaAvail) {
+        float[] a = new float[SPELL_CANDIDATE.length];
+        int i = 0;
+        a[i++] = 0; a[i++] = rank; a[i++] = stockPick ? 1 : 0;
+        a[i++] = sa.isSpell() ? 1 : 0; a[i++] = sa.isActivatedAbility() ? 1 : 0; a[i++] = sa.isPwAbility() ? 1 : 0; a[i++] = sa.isCycling() ? 1 : 0;
+        Card c = sa.getHostCard();
+        boolean creature = c != null && c.isCreature();
+        a[i++] = creature ? 1 : 0;
+        a[i++] = c != null && c.getType().isInstant() ? 1 : 0; a[i++] = c != null && c.getType().isSorcery() ? 1 : 0;
+        a[i++] = c != null && c.getType().isArtifact() ? 1 : 0; a[i++] = c != null && c.getType().isEnchantment() ? 1 : 0;
+        a[i++] = c != null && c.isPlaneswalker() ? 1 : 0; a[i++] = c != null && c.getType().isLegendary() ? 1 : 0; a[i++] = c != null && c.isCommander() ? 1 : 0;
+        a[i++] = c == null ? 0 : c.getCMC(); a[i++] = creature ? c.getNetPower() : 0; a[i++] = creature ? c.getNetToughness() : 0;
+        a[i++] = creature ? kw(c, Keyword.FLYING) : 0; a[i++] = creature ? kw(c, Keyword.TRAMPLE) : 0; a[i++] = creature ? kw(c, Keyword.DEATHTOUCH) : 0;
+        a[i++] = creature ? kw(c, Keyword.LIFELINK) : 0; a[i++] = creature ? kw(c, Keyword.MENACE) : 0; a[i++] = creature ? kw(c, Keyword.HASTE) : 0;
+        a[i++] = creature ? kw(c, Keyword.VIGILANCE) : 0; a[i++] = creature ? kw(c, Keyword.HEXPROOF) : 0;
+        forge.game.cost.Cost cost = sa.getPayCosts();
+        int mana = cost != null && cost.hasManaCost() ? cost.getTotalMana().getCMC() : 0;
+        a[i++] = mana; a[i++] = cost != null && cost.hasTapCost() ? 1 : 0;
+        a[i++] = cost != null && cost.hasSpecificCostType(forge.game.cost.CostSacrifice.class) ? 1 : 0;
+        a[i++] = cost != null && cost.hasSpecificCostType(forge.game.cost.CostPayLife.class) ? 1 : 0;
+        a[i++] = cost != null && cost.hasSpecificCostType(forge.game.cost.CostDiscard.class) ? 1 : 0;
+        a[i++] = manaAvail - mana;
+        int tgtBase = i; i += 4; int ownIdx = i++, oppIdx = i++, pwrIdx = i++;
+        if (sa.usesTargeting() && sa.getTargets() != null) {
+            for (Player p : sa.getTargets().getTargetPlayers()) { int r = seats.indexOf(p); if (r >= 0 && r < 4) a[tgtBase + r] = 1; }
+            for (Card t : sa.getTargets().getTargetCards()) {
+                if (t.getController() == acting) a[ownIdx] = 1; else a[oppIdx] = 1;
+                if (t.isCreature()) a[pwrIdx] = Math.max(a[pwrIdx], t.getNetPower());
+            }
+        }
+        ZoneType z = c != null && c.getZone() != null ? c.getZone().getZoneType() : null;
+        a[i++] = z == ZoneType.Hand ? 1 : 0; a[i++] = z == ZoneType.Battlefield ? 1 : 0; a[i++] = z == ZoneType.Graveyard ? 1 : 0; a[i++] = z == ZoneType.Command ? 1 : 0;
+        Integer bin = sa.getApi() == null ? null : API_BIN.get(sa.getApi().name());
+        a[SPELL_FIXED.length + (bin == null ? API_BINS.length : bin)] = 1;
         return a;
     }
 }

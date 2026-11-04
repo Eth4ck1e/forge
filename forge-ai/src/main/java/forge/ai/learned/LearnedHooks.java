@@ -22,13 +22,16 @@ import forge.game.player.Player;
  */
 public final class LearnedHooks {
     public static final String ATTACK_TARGET = "attack_target";
+    public static final String SPELL_CHOICE = "spell_choice";
+    /** How many heuristic-approved plays the spell-choice hook collects per priority (plus "pass"). */
+    public static int spellCandidates = 4;
 
     /** Scores (state, candidate) pairs; null until a model is loaded (M3). */
     public interface Scorer {
         float[] score(float[] x, float[][] xa);
     }
 
-    private static volatile Scorer scorer;
+    private static final java.util.concurrent.ConcurrentHashMap<String, Scorer> SCORERS = new java.util.concurrent.ConcurrentHashMap<>();
     /**
      * Exploration for data generation (M4 off-policy fix): with this probability a stock-piloted seat attacks a
      * uniformly random candidate instead of the stock rule's pick, and the record is logged with pilot "explore" and
@@ -41,7 +44,8 @@ public final class LearnedHooks {
 
     private LearnedHooks() {}
 
-    public static void setScorer(Scorer s) { scorer = s; }
+    public static void setScorer(String hook, Scorer s) { if (s == null) SCORERS.remove(hook); else SCORERS.put(hook, s); }
+    public static Scorer scorer(String hook) { return SCORERS.get(hook); }
 
     public static void beginDeclare(Player ai) { DECLARING.set(ai); }
     public static void endDeclare() { DECLARING.remove(); }
@@ -59,6 +63,7 @@ public final class LearnedHooks {
      */
     public static Player attackTarget(Player ai, List<Player> opponents, Map<Player, Integer> threat, Player stock) {
         boolean declaring = DECLARING.get() == ai;
+        Scorer scorer = SCORERS.get(ATTACK_TARGET);
         boolean learned = hookOn(ai, AiProps.LEARNED_ATTACK_TARGET) && scorer != null;
         boolean explore = declaring && !learned && exploreRate > 0 && forge.util.MyRandom.getRandom().nextDouble() < exploreRate;
         if (!declaring || (!LearnLog.enabled() && !learned && !explore) || opponents.size() < 2) return null;
@@ -91,6 +96,49 @@ public final class LearnedHooks {
                     abs, cands, chosen, stockIdx, learned ? "learned" : (explore ? "explore" : "stock"), x, xa);
         }
         return (learned || explore) && chosen >= 0 ? opponents.get(chosen) : null;
+    }
+
+    /** Whether the spell-choice hook needs the list of approved plays (logging, exploration or a loaded model). */
+    public static boolean spellChoiceActive(Player ai) {
+        return LearnLog.enabled() || exploreRate > 0 || (hookOn(ai, AiProps.LEARNED_SPELL_CHOICE) && SCORERS.get(SPELL_CHOICE) != null);
+    }
+
+    /**
+     * H1 spell-choice hook: {@code approved} are the heuristics' approved plays in their order (index 0 is the stock
+     * choice); "pass" is the extra last candidate. Returns the play to make, or null to pass priority.
+     */
+    public static forge.game.spellability.SpellAbility spellChoice(Player ai, List<forge.game.spellability.SpellAbility> approved) {
+        if (approved.isEmpty()) return null;   // nothing playable: pass, nothing to decide
+        Scorer scorer = SCORERS.get(SPELL_CHOICE);
+        boolean learned = hookOn(ai, AiProps.LEARNED_SPELL_CHOICE) && scorer != null;
+        boolean explore = !learned && exploreRate > 0 && forge.util.MyRandom.getRandom().nextDouble() < exploreRate;
+        if (!LearnLog.enabled() && !learned && !explore) return approved.get(0);
+
+        List<Player> seats = Features.seatsFrom(ai);
+        float[] x = Features.state(ai);
+        int n = approved.size() + 1;
+        float[][] xa = new float[n][];
+        int[] cands = new int[n];
+        int manaAvail = forge.ai.ComputerUtilMana.getAvailableManaEstimate(ai, false);
+        for (int i = 0; i < approved.size(); i++) { xa[i] = Features.spellCandidate(ai, approved.get(i), i, i == 0, seats, manaAvail); cands[i] = i; }
+        xa[n - 1] = Features.passCandidate(n - 1, manaAvail); cands[n - 1] = -1;   // -1 marks "pass"
+        int chosen = 0;
+        if (learned) {
+            float[] s = scorer.score(x, xa);
+            int best = 0;
+            for (int i = 1; i < s.length; i++) if (s[i] > s[best]) best = i;
+            if (s[best] - s[0] > margin) chosen = best;
+        } else if (explore) {
+            chosen = forge.util.MyRandom.getRandom().nextInt(n);
+        }
+        if (LearnLog.enabled()) {
+            int[] abs = new int[seats.size()];
+            for (int i = 0; i < seats.size(); i++) abs[i] = seatNumber(seats.get(i));
+            PhaseType ph = ai.getGame().getPhaseHandler().getPhase();
+            LearnLog.decision(SPELL_CHOICE, seatNumber(ai), ai.getGame().getPhaseHandler().getTurn(), ph == null ? 0 : ph.ordinal(),
+                    abs, cands, chosen, 0, learned ? "learned" : (explore ? "explore" : "stock"), x, xa);
+        }
+        return chosen == n - 1 ? null : approved.get(chosen);
     }
 
     /** 1-based seat number as used in SIMRESULT (registration order). */

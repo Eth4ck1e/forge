@@ -41,8 +41,9 @@ public final class LearnLog {
         out = new OutputStreamWriter(new GZIPOutputStream(new BufferedOutputStream(new FileOutputStream(f), 1 << 16)), StandardCharsets.UTF_8);
         StringBuilder sb = new StringBuilder("{\"schema\":").append(Features.SCHEMA).append(",\"seed\":").append(seed0);
         sb.append(",\"names\":"); strings(sb, Features.names());
-        sb.append(",\"candNames\":"); strings(sb, java.util.Arrays.asList(Features.CANDIDATE));
-        sb.append(",\"hooks\":[\"attack_target\"]}\n");
+        sb.append(",\"candNames\":{\"attack_target\":"); strings(sb, java.util.Arrays.asList(Features.CANDIDATE));
+        sb.append(",\"spell_choice\":"); strings(sb, java.util.Arrays.asList(Features.SPELL_CANDIDATE));
+        sb.append("},\"hooks\":[\"attack_target\",\"spell_choice\"]}\n");
         out.write(sb.toString());
         Runtime.getRuntime().addShutdownHook(new Thread(LearnLog::close));
     }
