@@ -37,7 +37,9 @@ public final class LearnedHooks {
      * uniformly random candidate instead of the stock rule's pick, and the record is logged with pilot "explore" and
      * the propensity 1/n. Zero in evaluation runs.
      */
-    public static volatile double exploreRate = 0.0;
+    private static final java.util.concurrent.ConcurrentHashMap<String, Double> EXPLORE = new java.util.concurrent.ConcurrentHashMap<>();
+    public static void setExploreRate(String hook, double rate) { EXPLORE.put(hook, rate); }
+    public static double exploreRate(String hook) { return EXPLORE.getOrDefault(hook, 0.0); }
     /** Conservative override: the learned pick replaces the stock pick only when its score beats the stock pick's by this much. */
     public static volatile float margin = 0.0f;
     private static final ThreadLocal<Player> DECLARING = new ThreadLocal<>();
@@ -65,7 +67,8 @@ public final class LearnedHooks {
         boolean declaring = DECLARING.get() == ai;
         Scorer scorer = SCORERS.get(ATTACK_TARGET);
         boolean learned = hookOn(ai, AiProps.LEARNED_ATTACK_TARGET) && scorer != null;
-        boolean explore = declaring && !learned && exploreRate > 0 && forge.util.MyRandom.getRandom().nextDouble() < exploreRate;
+        final double er = exploreRate(ATTACK_TARGET);
+        boolean explore = declaring && !learned && er > 0 && forge.util.MyRandom.getRandom().nextDouble() < er;
         if (!declaring || (!LearnLog.enabled() && !learned && !explore) || opponents.size() < 2) return null;
 
         List<Player> seats = Features.seatsFrom(ai);
@@ -100,7 +103,7 @@ public final class LearnedHooks {
 
     /** Whether the spell-choice hook needs the list of approved plays (logging, exploration or a loaded model). */
     public static boolean spellChoiceActive(Player ai) {
-        return LearnLog.enabled() || exploreRate > 0 || (hookOn(ai, AiProps.LEARNED_SPELL_CHOICE) && SCORERS.get(SPELL_CHOICE) != null);
+        return LearnLog.enabled() || exploreRate(SPELL_CHOICE) > 0 || (hookOn(ai, AiProps.LEARNED_SPELL_CHOICE) && SCORERS.get(SPELL_CHOICE) != null);
     }
 
     /**
@@ -111,7 +114,8 @@ public final class LearnedHooks {
         if (approved.isEmpty()) return null;   // nothing playable: pass, nothing to decide
         Scorer scorer = SCORERS.get(SPELL_CHOICE);
         boolean learned = hookOn(ai, AiProps.LEARNED_SPELL_CHOICE) && scorer != null;
-        boolean explore = !learned && exploreRate > 0 && forge.util.MyRandom.getRandom().nextDouble() < exploreRate;
+        final double er = exploreRate(SPELL_CHOICE);
+        boolean explore = !learned && er > 0 && forge.util.MyRandom.getRandom().nextDouble() < er;
         if (!LearnLog.enabled() && !learned && !explore) return approved.get(0);
 
         List<Player> seats = Features.seatsFrom(ai);

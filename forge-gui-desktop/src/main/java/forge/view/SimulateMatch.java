@@ -224,8 +224,13 @@ public class SimulateMatch {
         // hooked decisions from it, every other seat keeps the stock heuristics
         // learned-ai M4: -explore <rate> makes stock seats attack a random opponent with that probability (data generation only)
         if (params.containsKey("explore")) {
-            forge.ai.learned.LearnedHooks.exploreRate = Double.parseDouble(params.get("explore").get(0));
-            System.out.println("SIMNOTE explore rate " + forge.ai.learned.LearnedHooks.exploreRate);
+            for (final String spec : params.get("explore")) {   // "<hook>=<rate>"; a bare rate means attack_target
+                final int eq = spec.indexOf('=');
+                final String hook = eq < 0 ? forge.ai.learned.LearnedHooks.ATTACK_TARGET : spec.substring(0, eq);
+                final double rate = Double.parseDouble(eq < 0 ? spec : spec.substring(eq + 1));
+                forge.ai.learned.LearnedHooks.setExploreRate(hook, rate);
+                System.out.println("SIMNOTE explore rate " + hook + " " + rate);
+            }
         }
         if (params.containsKey("spellcands")) {
             forge.ai.learned.LearnedHooks.spellCandidates = Integer.parseInt(params.get("spellcands").get(0));
