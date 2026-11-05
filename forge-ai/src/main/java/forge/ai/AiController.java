@@ -1447,6 +1447,10 @@ public class AiController {
             try {
                 // When player != defender, AI should declare blockers for its benefit.
                 block.assignBlockersForCombat(combat);
+                // learned-ai D19: snapshot of the board and the blocks just declared, for the offline combat solver
+                if (forge.ai.learned.LearnLog.enabled() && defender == player) {
+                    forge.ai.learned.LearnLog.raw("combat_snapshot", forge.ai.learned.CombatSnapshot.json(defender, combat, "blockers"));
+                }
             } catch (AITimeoutTracker.Expired e) {
                 // out of time: keep the blocks decided so far (each block is added atomically, so combat stays consistent)
                 AITimeoutTracker.disarm(limit); // the fallback below must not be cut short again
@@ -1539,6 +1543,10 @@ public class AiController {
 
             aiAtk.reinforceWithBanding(combat);
             refineAttackWithFlatMonteCarlo(attacker, combat);
+            // learned-ai D19: exact combat snapshot with the declaration, for the offline combat solver
+            if (forge.ai.learned.LearnLog.enabled() && attacker == player) {
+                forge.ai.learned.LearnLog.raw("combat_snapshot", forge.ai.learned.CombatSnapshot.json(attacker, combat, "attackers"));
+            }
         } catch (AITimeoutTracker.Expired e) {
             // out of time: attack with what was decided so far; the validity check below repairs an illegal declaration
         } finally {

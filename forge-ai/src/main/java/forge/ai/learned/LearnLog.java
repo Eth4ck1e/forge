@@ -85,6 +85,14 @@ public final class LearnLog {
         try { out.write(sb.toString()); lines++; } catch (IOException e) { System.err.println("learnlog: " + e); }
     }
 
+    /** A record of another shape (e.g. a combat snapshot): {@code body} is the inside of the JSON object. */
+    public static synchronized void raw(String hook, String body) {
+        if (out == null) return;
+        StringBuilder sb = new StringBuilder(body.length() + 96);
+        sb.append("{\"v\":").append(Features.SCHEMA).append(",\"hook\":\"").append(hook).append("\",\"seed\":").append(seed).append(",\"game\":").append(game).append(',').append(body).append("}\n");
+        try { out.write(sb.toString()); lines++; } catch (IOException e) { System.err.println("learnlog: " + e); }
+    }
+
     private static void ints(StringBuilder sb, int[] a) {
         sb.append('[');
         for (int i = 0; i < a.length; i++) { if (i > 0) sb.append(','); sb.append(a[i]); }
