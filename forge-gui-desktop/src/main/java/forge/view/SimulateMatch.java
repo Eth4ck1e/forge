@@ -232,7 +232,7 @@ public class SimulateMatch {
                 System.out.println("SIMNOTE explore rate " + hook + " " + rate);
             }
         }
-        // learned-ai D20: -fork seat=<n> hook=<h> index=<k> choose=<pos> seed=<s> (one flag, all tokens; game 1 only, run -n 1)
+        // learned-ai D20: -fork seat=<n> hook=<h> index=<k> choose=<pos> seed=<s> (one flag, all tokens; game 1 only, run -n 1 -s <gameSeed>)
         if (params.containsKey("fork")) {
             forge.ai.learned.LearnedHooks.configureFork(params.get("fork"));
         }
@@ -282,6 +282,7 @@ public class SimulateMatch {
             int iGame = 0;
             while (!mc.isMatchOver()) {
                 // play games until the match ends
+                gameSeed = iGame == 0 ? lastSeed : null;   // learned-ai D20: later games of a match are not replayable
                 simulateSingleMatch(mc, iGame, outputGamelog);
                 iGame++;
             }
@@ -291,7 +292,11 @@ public class SimulateMatch {
                     System.out.println("SIMNOTE stop file present, exiting after " + iGame + " games");
                     break;
                 }
-                simulateSingleMatch(mc, iGame, outputGamelog);
+                // learned-ai D20: every game of a -n run is a standalone first game: fresh Match (no previous outcome
+                // choosing the starting player, no sideboarding), engine id counters back to their pre-game-1 values
+                // and MyRandom reseeded with the per-game seed, so `-s <gameSeed> -n 1` replays game k exactly
+                beginStandaloneGame(iGame);
+                simulateSingleMatch(iGame == 0 ? mc : new Match(rules, pp, "Test"), iGame, outputGamelog);
             }
         }
 
@@ -312,7 +317,7 @@ public class SimulateMatch {
         System.out.println("\tT - Type of tournament to run with all provided decks (Bracket, RoundRobin, Swiss)");
         System.out.println("\tP - Amount of players per match (used only with Tournaments, defaults to 2)");
         System.out.println("\tF - format of games, defaults to constructed");
-        System.out.println("\tS - RNG seed for simulation");
+        System.out.println("\tS - RNG seed for simulation (a long). Game 1 uses it as is; game k >= 2 of a -n run uses (S << 32) | (k - 1), printed as gameSeed in SIMRESULT; -s <gameSeed> -n 1 replays that game.");
         System.out.println("\tA - AI profile per player, in the same order as the decks (e.g. -a Default Experimental)");
         System.out.println("\tc - Clock flag. Set the maximum time in seconds before calling the match a draw, defaults to 120.");
         System.out.println("\tmc - Flat Monte Carlo AI refinement for this run, on, max or off (default off in simulations; max = desktop strength). Prints timing statistics at the end when on.");
@@ -322,12 +327,58 @@ public class SimulateMatch {
         System.out.println("\tstop - Path of a stop file; the run exits before the next game once it exists.");
         System.out.println("\tx - Exit the process (code 3) after a wall-clock timeout; the cancelled game thread cannot be stopped.");
         System.out.println("\tat - Per-decision AI time budget in seconds (default 5).");
-        System.out.println("\tfork - seat=<n> hook=<spell_choice|attack_target> index=<k> choose=<pos> seed=<s>: force candidate <pos> at the k-th (0-based) logged decision of that seat and hook, then reseed (0 = keep). One -fork flag with all tokens; game 1 only (use -n 1).");
+        System.out.println("\tfork - seat=<n> hook=<spell_choice|attack_target> index=<k> choose=<pos> seed=<s>: force candidate <pos> at the k-th (0-based) logged decision of that seat and hook, then reseed (0 = keep). One -fork flag with all tokens; game 1 only (use -n 1 -s <gameSeed> for a later game).");
         System.out.println("\tr - Turn cap in table rounds (rounds * players engine turns); games reaching it are recorded as draws. One SIMRESULT json line is printed per game.");
     }
 
     // learned-ai: run seed, echoed into every SIMRESULT line
     private static Long lastSeed = null;
+    // learned-ai D20: seed of the game being played (null when unseeded, or for a non-first game of -m / tournament)
+    private static Long gameSeed = null;
+
+    /** learned-ai D20: game 1 keeps the run seed; game k >= 2 gets (runSeed << 32) | (k - 1). */
+    public static long gameSeedFor(final long runSeed, final int game) {
+        return game <= 1 ? runSeed : (runSeed << 32) | (game - 1);
+    }
+
+    // learned-ai D20: static id counters of the engine. SpellAbility ids feed hashCode (hash-set iteration order), so
+    // a later game in the same JVM would not match a standalone run of it unless these start where game 1 started.
+    private static final String[][] ID_COUNTERS = {
+            {"forge.game.Game", "maxId"},
+            {"forge.game.spellability.SpellAbility", "maxId"},
+            {"forge.game.spellability.SpellAbilityStackInstance", "maxId"},
+            {"forge.game.trigger.Trigger", "maxId"},
+            {"forge.game.replacement.ReplacementEffect", "maxId"},
+            {"forge.game.staticability.StaticAbility", "maxId"},
+            {"forge.game.combat.CombatView", "nextId"},
+    };
+    private static int[] idCountersAtGame1 = null;
+
+    private static void beginStandaloneGame(final int iGame) {
+        try {
+            if (iGame == 0) {
+                idCountersAtGame1 = new int[ID_COUNTERS.length];
+            }
+            for (int k = 0; k < ID_COUNTERS.length; k++) {
+                final java.lang.reflect.Field f = Class.forName(ID_COUNTERS[k][0]).getDeclaredField(ID_COUNTERS[k][1]);
+                f.setAccessible(true);
+                if (iGame == 0) {
+                    idCountersAtGame1[k] = f.getInt(null);
+                } else {
+                    f.setInt(null, idCountersAtGame1[k]);
+                }
+            }
+        } catch (ReflectiveOperationException e) {
+            throw new RuntimeException("id counters: " + e, e);
+        }
+        if (iGame > 0) {
+            forge.ai.learned.LearnedHooks.resetProfileModels();   // profile models load on the first hooked decision
+        }
+        gameSeed = lastSeed == null ? null : gameSeedFor(lastSeed, iGame + 1);
+        if (gameSeed != null) {
+            MyRandom.setRandom(new Random(gameSeed));
+        }
+    }
     // learned-ai: -x makes the process exit (code 3) after a wall-clock timeout instead of continuing with a runaway thread
     private static boolean exitOnTimeout = false;
     // learned-ai: -at <seconds> overrides the per-decision AI budget (Game.AI_TIMEOUT, default 5)
@@ -357,6 +408,7 @@ public class SimulateMatch {
         final StringBuilder sb = new StringBuilder("SIMRESULT {");
         sb.append("\"game\":").append(iGame + 1);
         sb.append(",\"seed\":").append(lastSeed == null ? "null" : lastSeed.toString());
+        sb.append(",\"gameSeed\":").append(gameSeed == null ? "null" : gameSeed.toString());   // learned-ai D20
         final int turns = g.getPhaseHandler() == null ? 0 : g.getPhaseHandler().getTurn();
         final int cap = g.getRules().getTurnCap();
         sb.append(",\"turns\":").append(turns);
@@ -408,7 +460,7 @@ public class SimulateMatch {
         int exceptions = 0;
         boolean timedOut = false;
         // will run match in the same thread
-        forge.ai.learned.LearnLog.beginGame(iGame + 1);   // SIMRESULT numbers games from 1
+        forge.ai.learned.LearnLog.beginGame(iGame + 1, gameSeed == null ? 0L : gameSeed.longValue());   // SIMRESULT numbers games from 1
         try {
             TimeLimitedCodeBlock.runWithTimeout(() -> {
                 mc.startGame(g1);

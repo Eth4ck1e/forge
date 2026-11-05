@@ -23,6 +23,7 @@ public final class LearnLog {
     private static Writer out;
     private static long seed;
     private static int game;
+    private static long gseed;   // D20: the game's own seed (SIMRESULT gameSeed); -s <gseed> -n 1 replays it
     private static long lines;
 
     private LearnLog() {}
@@ -48,7 +49,7 @@ public final class LearnLog {
         Runtime.getRuntime().addShutdownHook(new Thread(LearnLog::close));
     }
 
-    public static synchronized void beginGame(int iGame) { game = iGame; }
+    public static synchronized void beginGame(int iGame, long gameSeed) { game = iGame; gseed = gameSeed; }
 
     /** Flushes after each game so a killed worker loses at most the game in progress. */
     public static synchronized void endGame() {
@@ -73,7 +74,7 @@ public final class LearnLog {
         if (out == null) return;
         StringBuilder sb = new StringBuilder(8192);
         sb.append("{\"v\":").append(Features.SCHEMA).append(",\"hook\":\"").append(hook).append('"');
-        sb.append(",\"seed\":").append(seed).append(",\"game\":").append(game).append(",\"seat\":").append(actingSeat);
+        sb.append(",\"seed\":").append(seed).append(",\"game\":").append(game).append(",\"gseed\":").append(gseed).append(",\"seat\":").append(actingSeat);
         sb.append(",\"turn\":").append(turn).append(",\"phase\":").append(phase);
         sb.append(",\"seats\":"); ints(sb, seats);
         sb.append(",\"cands\":"); ints(sb, cands);
@@ -89,7 +90,7 @@ public final class LearnLog {
     public static synchronized void raw(String hook, String body) {
         if (out == null) return;
         StringBuilder sb = new StringBuilder(body.length() + 96);
-        sb.append("{\"v\":").append(Features.SCHEMA).append(",\"hook\":\"").append(hook).append("\",\"seed\":").append(seed).append(",\"game\":").append(game).append(',').append(body).append("}\n");
+        sb.append("{\"v\":").append(Features.SCHEMA).append(",\"hook\":\"").append(hook).append("\",\"seed\":").append(seed).append(",\"game\":").append(game).append(",\"gseed\":").append(gseed).append(',').append(body).append("}\n");
         try { out.write(sb.toString()); lines++; } catch (IOException e) { System.err.println("learnlog: " + e); }
     }
 

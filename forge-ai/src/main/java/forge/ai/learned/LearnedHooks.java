@@ -129,6 +129,21 @@ public final class LearnedHooks {
     }
 
     private static volatile boolean profileModelsTried = false;
+    // D20: scorers loaded from the profile (hook -> path) and the loaded models by path, so a per-game reset is cheap
+    private static final java.util.Map<String, String> PROFILE_LOADED = new java.util.HashMap<>();
+    private static final java.util.Map<String, Scorer> PROFILE_MODEL_CACHE = new java.util.HashMap<>();
+
+    /**
+     * D20: puts the profile-model state back to how a fresh process starts a game (nothing loaded, loaded on the first
+     * hooked decision), so game k of a multi-game run plays like a standalone {@code -n 1} run of its seed. The first
+     * hooked decision of a process finds no scorer (it is read before {@link #hookOn} loads it) and goes stock; with
+     * this reset that happens in every game, not only the first one of the JVM. Models stay cached by path.
+     */
+    public static synchronized void resetProfileModels() {
+        for (String hook : PROFILE_LOADED.keySet()) SCORERS.remove(hook);
+        PROFILE_LOADED.clear();
+        profileModelsTried = false;
+    }
 
     /**
      * GUI and any run without {@code -model}: load the scorers named by the profile's LEARNED_MODEL
@@ -150,8 +165,14 @@ public final class LearnedHooks {
                 java.io.File f = new java.io.File(path);
                 if (!f.isAbsolute() && forge.ai.AiProfileUtil.getProfileDir() != null) f = new java.io.File(forge.ai.AiProfileUtil.getProfileDir(), path);
                 try {
-                    SCORERS.put(hook, new OnnxScorer(f.getPath()));
-                    System.out.println("learned-ai: loaded " + hook + " model " + f.getPath());
+                    Scorer cached = PROFILE_MODEL_CACHE.get(f.getPath());
+                    if (cached == null) {
+                        cached = new OnnxScorer(f.getPath());
+                        PROFILE_MODEL_CACHE.put(f.getPath(), cached);
+                        System.out.println("learned-ai: loaded " + hook + " model " + f.getPath());
+                    }
+                    SCORERS.put(hook, cached);
+                    PROFILE_LOADED.put(hook, f.getPath());
                 } catch (Exception e) {
                     System.err.println("learned-ai: could not load " + hook + " model " + f.getPath() + ": " + e);
                 }
