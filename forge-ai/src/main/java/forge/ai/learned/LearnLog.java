@@ -47,6 +47,7 @@ public final class LearnLog {
         sb.append("},\"hooks\":[\"attack_target\",\"spell_choice\"]}\n");
         out.write(sb.toString());
         Runtime.getRuntime().addShutdownHook(new Thread(LearnLog::close));
+        forge.game.combat.Combat.learnedDamageObserver = CombatSnapshot::damage;   // D19: "combat_damage" records
     }
 
     public static synchronized void beginGame(int iGame, long gameSeed) { game = iGame; gseed = gameSeed; }
@@ -58,6 +59,7 @@ public final class LearnLog {
     }
 
     public static synchronized void close() {
+        forge.game.combat.Combat.learnedDamageObserver = null;
         if (out == null) return;
         try { out.close(); } catch (IOException ignored) {}
         out = null;

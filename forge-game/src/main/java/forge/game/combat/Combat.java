@@ -953,9 +953,26 @@ public class Combat {
         return !firstStrikeDamage && !combatantsThatDealtFirstStrikeDamage.get().contains(combatant);
     }
 
+    // learned-ai D19: optional observer, called once per combat damage step after all combat damage has been assigned
+    // and before it is dealt (damage table = getAssignedCombatDamage()); null in stock play. Must not change the game.
+    public static volatile java.util.function.BiConsumer<Combat, Boolean> learnedDamageObserver;
+    public final CardDamageTable getAssignedCombatDamage() { return damageMap.get(); } // learned-ai D19
+    /** learned-ai D19: the attacker's blockers in damage assignment order (null if no order was recorded). */
+    public final CardCollection getBlockersInDamageOrder(Card attacker) {
+        CardCollection o = blockersOrderedForDamageAssignment.get().get(attacker);
+        return o == null ? null : new CardCollection(o);
+    }
+    /** learned-ai D19: the blocker's attackers in damage assignment order (null if none recorded). */
+    public final CardCollection getAttackersInDamageOrder(Card blocker) {
+        CardCollection o = attackersOrderedForDamageAssignment.get().get(blocker);
+        return o == null ? null : new CardCollection(o);
+    }
+    public final boolean isLegacyOrderCombatants() { return legacyOrderCombatants; } // learned-ai D19
+
     public final boolean assignCombatDamage(boolean firstStrikeDamage) {
         boolean assignedDamage = assignAttackersDamage(firstStrikeDamage);
         assignedDamage |= assignBlockersDamage(firstStrikeDamage);
+        if (assignedDamage && learnedDamageObserver != null) learnedDamageObserver.accept(this, firstStrikeDamage); // learned-ai D19
         if (!firstStrikeDamage) {
             // Clear first strike damage list since it doesn't matter anymore
             combatantsThatDealtFirstStrikeDamage.get().clear();
