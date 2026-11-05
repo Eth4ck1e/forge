@@ -53,6 +53,7 @@ public class LobbyPlayerAi extends LobbyPlayer implements IGameEntitiesFactory {
         if (rotateProfileEachGame) {
             setAiProfile(AiProfileUtil.getRandomProfile());
         }
+        forge.ai.learned.LearnedHooks.prepareSeat(ai);   // learned-ai: load profile models before the first decision
         return ai;
     }
 

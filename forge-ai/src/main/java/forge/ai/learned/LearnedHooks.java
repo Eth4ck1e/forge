@@ -128,16 +128,26 @@ public final class LearnedHooks {
         return true;
     }
 
+    /**
+     * Eager profile-model load: called when a seat is created for a game (LobbyPlayerAi.createIngamePlayer, after the
+     * profile is applied), so the seat's first hooked decision already has its scorer. Reads only the profile.
+     */
+    public static void prepareSeat(Player ai) {
+        if (!(ai.getController() instanceof PlayerControllerAi)) return;
+        AiController aic = ((PlayerControllerAi) ai.getController()).getAi();
+        if (!aic.getBoolProperty(AiProps.LEARNED_HOOKS)) return;
+        ensureModelsLoaded(aic);
+    }
+
     private static volatile boolean profileModelsTried = false;
     // D20: scorers loaded from the profile (hook -> path) and the loaded models by path, so a per-game reset is cheap
     private static final java.util.Map<String, String> PROFILE_LOADED = new java.util.HashMap<>();
     private static final java.util.Map<String, Scorer> PROFILE_MODEL_CACHE = new java.util.HashMap<>();
 
     /**
-     * D20: puts the profile-model state back to how a fresh process starts a game (nothing loaded, loaded on the first
-     * hooked decision), so game k of a multi-game run plays like a standalone {@code -n 1} run of its seed. The first
-     * hooked decision of a process finds no scorer (it is read before {@link #hookOn} loads it) and goes stock; with
-     * this reset that happens in every game, not only the first one of the JVM. Models stay cached by path.
+     * D20: puts the profile-model state back to how a fresh process starts a game (nothing loaded), so game k of a
+     * multi-game run plays like a standalone {@code -n 1} run of its seed. The scorers are put back when the game's
+     * seats are created ({@link #prepareSeat}), before any decision; the ONNX sessions stay cached by path.
      */
     public static synchronized void resetProfileModels() {
         for (String hook : PROFILE_LOADED.keySet()) SCORERS.remove(hook);
@@ -148,7 +158,7 @@ public final class LearnedHooks {
     /**
      * GUI and any run without {@code -model}: load the scorers named by the profile's LEARNED_MODEL
      * ("spell_choice=learned/spell_choice.onnx;attack_target=..."), paths relative to the AI profile folder
-     * (res/ai) unless absolute. Done once per process, on the first hooked decision of a Learned seat.
+     * (res/ai) unless absolute. Done when a Learned seat is created ({@link #prepareSeat}), with the hooked decisions as a fallback.
      */
     private static void ensureModelsLoaded(AiController aic) {
         if (profileModelsTried) return;
@@ -187,8 +197,9 @@ public final class LearnedHooks {
      */
     public static Player attackTarget(Player ai, List<Player> opponents, Map<Player, Integer> threat, Player stock) {
         boolean declaring = DECLARING.get() == ai;
+        boolean on = hookOn(ai, AiProps.LEARNED_ATTACK_TARGET);   // loads profile models if not yet loaded
         Scorer scorer = SCORERS.get(ATTACK_TARGET);
-        boolean learned = hookOn(ai, AiProps.LEARNED_ATTACK_TARGET) && scorer != null;
+        boolean learned = on && scorer != null;
         final double er = exploreRate(ATTACK_TARGET);
         boolean explore = declaring && !learned && er > 0 && forge.util.MyRandom.getRandom().nextDouble() < er;
         if (!declaring || opponents.size() < 2) return null;
@@ -238,8 +249,9 @@ public final class LearnedHooks {
      */
     public static forge.game.spellability.SpellAbility spellChoice(Player ai, List<forge.game.spellability.SpellAbility> approved) {
         if (approved.isEmpty()) return null;   // nothing playable: pass, nothing to decide
+        boolean on = hookOn(ai, AiProps.LEARNED_SPELL_CHOICE);   // loads profile models if not yet loaded
         Scorer scorer = SCORERS.get(SPELL_CHOICE);
-        boolean learned = hookOn(ai, AiProps.LEARNED_SPELL_CHOICE) && scorer != null;
+        boolean learned = on && scorer != null;
         final double er = exploreRate(SPELL_CHOICE);
         boolean explore = !learned && er > 0 && forge.util.MyRandom.getRandom().nextDouble() < er;
         final int forced = countDecision(SPELL_CHOICE, seatNumber(ai), approved.size() + 1, ai.getGame().getPhaseHandler().getTurn());

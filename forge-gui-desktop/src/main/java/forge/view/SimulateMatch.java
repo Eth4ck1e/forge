@@ -372,7 +372,7 @@ public class SimulateMatch {
             throw new RuntimeException("id counters: " + e, e);
         }
         if (iGame > 0) {
-            forge.ai.learned.LearnedHooks.resetProfileModels();   // profile models load on the first hooked decision
+            forge.ai.learned.LearnedHooks.resetProfileModels();   // profile models reload when the seats are created
         }
         gameSeed = lastSeed == null ? null : gameSeedFor(lastSeed, iGame + 1);
         if (gameSeed != null) {
