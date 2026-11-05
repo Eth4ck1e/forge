@@ -105,7 +105,7 @@ public class AiProfileUtil {
                 continue;
             }
 
-            final String[] split = line.split("=");
+            final String[] split = line.split("=", 2);   // values may contain '=' (LEARNED_MODEL=hook=path)
 
             // learned-ai: a profile may carry properties this build does not know (a newer profile file next to an
             // older jar); skip them instead of failing the whole application at startup
