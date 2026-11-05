@@ -360,6 +360,7 @@ public class PhaseHandler implements java.io.Serializable, IHasForgeLog {
                     break;
 
                 case COMBAT_END:
+                    if (combat != null && Combat.learnedEndObserver != null) Combat.learnedEndObserver.accept(combat); // learned-ai D19
                     // End Combat always happens
                     for (final Card c : game.getCardsIn(ZoneType.Battlefield)) {
                         c.onEndOfCombat(playerTurn);

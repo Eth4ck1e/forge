@@ -48,18 +48,26 @@ public final class LearnLog {
         out.write(sb.toString());
         Runtime.getRuntime().addShutdownHook(new Thread(LearnLog::close));
         forge.game.combat.Combat.learnedDamageObserver = CombatSnapshot::damage;   // D19: "combat_damage" records
+        forge.game.combat.Combat.learnedEndObserver = CombatSnapshot::combatEnd;   // D19: "combat_result" records
     }
 
-    public static synchronized void beginGame(int iGame, long gameSeed) { game = iGame; gseed = gameSeed; }
+    public static void beginGame(int iGame, long gameSeed) {
+        CombatSnapshot.resetPending();   // outside the LearnLog lock: CombatSnapshot locks itself, then LearnLog
+        synchronized (LearnLog.class) { game = iGame; gseed = gameSeed; }
+    }
 
     /** Flushes after each game so a killed worker loses at most the game in progress. */
-    public static synchronized void endGame() {
-        if (out == null) return;
-        try { out.flush(); } catch (IOException ignored) {}
+    public static void endGame() {
+        CombatSnapshot.flushPending("gameover");   // D19: the game ended during a combat (no end-of-combat step); lock order as above
+        synchronized (LearnLog.class) {
+            if (out == null) return;
+            try { out.flush(); } catch (IOException ignored) {}
+        }
     }
 
     public static synchronized void close() {
         forge.game.combat.Combat.learnedDamageObserver = null;
+        forge.game.combat.Combat.learnedEndObserver = null;
         if (out == null) return;
         try { out.close(); } catch (IOException ignored) {}
         out = null;

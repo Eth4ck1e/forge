@@ -956,6 +956,8 @@ public class Combat {
     // learned-ai D19: optional observer, called once per combat damage step after all combat damage has been assigned
     // and before it is dealt (damage table = getAssignedCombatDamage()); null in stock play. Must not change the game.
     public static volatile java.util.function.BiConsumer<Combat, Boolean> learnedDamageObserver;
+    // learned-ai D19: optional observer, called when the combat-end step begins (before end-of-combat effects); null in stock play.
+    public static volatile java.util.function.Consumer<Combat> learnedEndObserver;
     public final CardDamageTable getAssignedCombatDamage() { return damageMap.get(); } // learned-ai D19
     /** learned-ai D19: the attacker's blockers in damage assignment order (null if no order was recorded). */
     public final CardCollection getBlockersInDamageOrder(Card attacker) {
