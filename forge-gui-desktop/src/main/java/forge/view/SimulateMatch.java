@@ -232,6 +232,10 @@ public class SimulateMatch {
                 System.out.println("SIMNOTE explore rate " + hook + " " + rate);
             }
         }
+        // learned-ai D20: -fork seat=<n> hook=<h> index=<k> choose=<pos> seed=<s> (one flag, all tokens; game 1 only, run -n 1)
+        if (params.containsKey("fork")) {
+            forge.ai.learned.LearnedHooks.configureFork(params.get("fork"));
+        }
         if (params.containsKey("spellcands")) {
             forge.ai.learned.LearnedHooks.spellCandidates = Integer.parseInt(params.get("spellcands").get(0));
         }
@@ -318,6 +322,7 @@ public class SimulateMatch {
         System.out.println("\tstop - Path of a stop file; the run exits before the next game once it exists.");
         System.out.println("\tx - Exit the process (code 3) after a wall-clock timeout; the cancelled game thread cannot be stopped.");
         System.out.println("\tat - Per-decision AI time budget in seconds (default 5).");
+        System.out.println("\tfork - seat=<n> hook=<spell_choice|attack_target> index=<k> choose=<pos> seed=<s>: force candidate <pos> at the k-th (0-based) logged decision of that seat and hook, then reseed (0 = keep). One -fork flag with all tokens; game 1 only (use -n 1).");
         System.out.println("\tr - Turn cap in table rounds (rounds * players engine turns); games reaching it are recorded as draws. One SIMRESULT json line is printed per game.");
     }
 
@@ -455,6 +460,7 @@ public class SimulateMatch {
         if (census) {
             System.out.println("SIMCENSUS " + forge.ai.learned.DecisionCensus.snapshotJson(true));
         }
+        forge.ai.learned.LearnedHooks.forkGameEnd();   // learned-ai D20
         forge.ai.learned.LearnLog.endGame();
         if (learnedScorer != null) {
             System.out.printf("SIMMODEL {\"calls\":%d,\"meanMicros\":%.1f}%n", learnedScorer.calls(), learnedScorer.meanMicros());

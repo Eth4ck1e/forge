@@ -46,6 +46,74 @@ public final class LearnedHooks {
 
     private LearnedHooks() {}
 
+    // ---- D20 counterfactual forks -------------------------------------------------------------------------------
+    // The k-th counted decision of (seat, hook) is the k-th record with that seat and hook in the game's decision
+    // file (0-based): counting happens exactly where a spell_choice / attack_target record would be written, whether
+    // or not the learn log is open. Counting consumes no randomness. A fork (-fork) forces one candidate at one
+    // address and optionally reseeds MyRandom right after the forced decision. Game 1 of the JVM only (run -n 1).
+    private static final java.util.HashMap<String, int[]> COUNTS = new java.util.HashMap<>();
+    private static volatile boolean forkConfigured = false;
+    private static boolean forkDone = false;
+    private static int forkSeat, forkIndex, forkChoose;
+    private static String forkHook;
+    private static long forkSeed;
+
+    /** Parses the {@code -fork} tokens: seat=<1-based> hook=<spell_choice|attack_target> index=<k> choose=<pos> seed=<s>. */
+    public static synchronized void configureFork(List<String> tokens) {
+        Integer seat = null, index = null, choose = null; String hook = null; long seed = 0;
+        for (String t : tokens) {
+            int eq = t.indexOf('=');
+            if (eq < 0) throw new IllegalArgumentException("fork: expected key=value, got " + t);
+            String k = t.substring(0, eq).trim(), v = t.substring(eq + 1).trim();
+            switch (k) {
+                case "seat": seat = Integer.parseInt(v); break;
+                case "hook": hook = v; break;
+                case "index": index = Integer.parseInt(v); break;
+                case "choose": choose = Integer.parseInt(v); break;
+                case "seed": seed = Long.parseLong(v); break;
+                default: throw new IllegalArgumentException("fork: unknown key " + k);
+            }
+        }
+        if (seat == null || hook == null || index == null || choose == null)
+            throw new IllegalArgumentException("fork: seat, hook, index and choose are required");
+        if (!SPELL_CHOICE.equals(hook) && !ATTACK_TARGET.equals(hook))
+            throw new IllegalArgumentException("fork: hook must be spell_choice or attack_target, got " + hook);
+        forkSeat = seat; forkHook = hook; forkIndex = index; forkChoose = choose; forkSeed = seed;
+        forkDone = false; forkConfigured = true;
+        System.out.println("SIMNOTE fork armed seat=" + seat + " hook=" + hook + " index=" + index + " choose=" + choose + " seed=" + seed);
+    }
+
+    /** Counts this decision and returns the forced candidate position if it is the fork point, else -1. */
+    private static synchronized int countDecision(String hook, int seat, int nCands, int turn) {
+        int[] c = COUNTS.computeIfAbsent(hook + "#" + seat, k -> new int[1]);
+        int idx = c[0]++;
+        if (!forkConfigured || forkDone || seat != forkSeat || idx != forkIndex || !hook.equals(forkHook)) return -1;
+        forkDone = true;
+        if (forkChoose < 0 || forkChoose >= nCands) {
+            System.out.println("SIMNOTE fork invalid choose=" + forkChoose + " (record has " + nCands + " candidates); not applied");
+            return -1;
+        }
+        System.out.println("SIMNOTE fork applied seat=" + seat + " hook=" + hook + " index=" + idx + " choose=" + forkChoose + " turn=" + turn);
+        return forkChoose;
+    }
+
+    /** Called after the forced decision is logged: reseeds the game's random source with the branch seed (0 = keep). */
+    private static void forkReseed() {
+        if (forkSeed == 0) return;
+        forge.util.MyRandom.setRandom(new java.util.Random(forkSeed));
+        System.out.println("SIMNOTE fork reseed " + forkSeed);
+    }
+
+    /** End of a game: reports an unreached fork, disarms it (game 1 only) and resets the decision counters. */
+    public static synchronized void forkGameEnd() {
+        if (forkConfigured && !forkDone) {
+            int[] c = COUNTS.get(forkHook + "#" + forkSeat);
+            System.out.println("SIMNOTE fork not reached (seat " + forkSeat + " hook " + forkHook + " saw " + (c == null ? 0 : c[0]) + " decisions)");
+        }
+        forkConfigured = false;
+        COUNTS.clear();
+    }
+
     public static void setScorer(String hook, Scorer s) { if (s == null) SCORERS.remove(hook); else SCORERS.put(hook, s); }
     public static Scorer scorer(String hook) { return SCORERS.get(hook); }
 
@@ -102,7 +170,9 @@ public final class LearnedHooks {
         boolean learned = hookOn(ai, AiProps.LEARNED_ATTACK_TARGET) && scorer != null;
         final double er = exploreRate(ATTACK_TARGET);
         boolean explore = declaring && !learned && er > 0 && forge.util.MyRandom.getRandom().nextDouble() < er;
-        if (!declaring || (!LearnLog.enabled() && !learned && !explore) || opponents.size() < 2) return null;
+        if (!declaring || opponents.size() < 2) return null;
+        final int forced = countDecision(ATTACK_TARGET, seatNumber(ai), opponents.size(), ai.getGame().getPhaseHandler().getTurn());
+        if (!LearnLog.enabled() && !learned && !explore && forced < 0) return null;
 
         List<Player> seats = Features.seatsFrom(ai);
         float[] x = Features.state(ai);
@@ -124,19 +194,21 @@ public final class LearnedHooks {
         } else if (explore) {
             chosen = forge.util.MyRandom.getRandom().nextInt(opponents.size());
         }
+        if (forced >= 0) chosen = forced;   // after the normal path, so the forced-same branch draws the same randomness
         if (LearnLog.enabled()) {
             int[] abs = new int[seats.size()];
             for (int i = 0; i < seats.size(); i++) abs[i] = seatNumber(seats.get(i));
             PhaseType ph = ai.getGame().getPhaseHandler().getPhase();
             LearnLog.decision(ATTACK_TARGET, seatNumber(ai), ai.getGame().getPhaseHandler().getTurn(), ph == null ? 0 : ph.ordinal(),
-                    abs, cands, chosen, stockIdx, learned ? "learned" : (explore ? "explore" : "stock"), x, xa);
+                    abs, cands, chosen, stockIdx, forced >= 0 ? "fork" : learned ? "learned" : (explore ? "explore" : "stock"), x, xa);
         }
-        return (learned || explore) && chosen >= 0 ? opponents.get(chosen) : null;
+        if (forced >= 0) forkReseed();
+        return (learned || explore || forced >= 0) && chosen >= 0 ? opponents.get(chosen) : null;
     }
 
     /** Whether the spell-choice hook needs the list of approved plays (logging, exploration or a loaded model). */
     public static boolean spellChoiceActive(Player ai) {
-        return LearnLog.enabled() || exploreRate(SPELL_CHOICE) > 0 || (hookOn(ai, AiProps.LEARNED_SPELL_CHOICE) && SCORERS.get(SPELL_CHOICE) != null);
+        return LearnLog.enabled() || forkConfigured || exploreRate(SPELL_CHOICE) > 0 || (hookOn(ai, AiProps.LEARNED_SPELL_CHOICE) && SCORERS.get(SPELL_CHOICE) != null);
     }
 
     /**
@@ -149,7 +221,8 @@ public final class LearnedHooks {
         boolean learned = hookOn(ai, AiProps.LEARNED_SPELL_CHOICE) && scorer != null;
         final double er = exploreRate(SPELL_CHOICE);
         boolean explore = !learned && er > 0 && forge.util.MyRandom.getRandom().nextDouble() < er;
-        if (!LearnLog.enabled() && !learned && !explore) return approved.get(0);
+        final int forced = countDecision(SPELL_CHOICE, seatNumber(ai), approved.size() + 1, ai.getGame().getPhaseHandler().getTurn());
+        if (!LearnLog.enabled() && !learned && !explore && forced < 0) return approved.get(0);
 
         List<Player> seats = Features.seatsFrom(ai);
         float[] x = Features.state(ai);
@@ -168,13 +241,15 @@ public final class LearnedHooks {
         } else if (explore) {
             chosen = forge.util.MyRandom.getRandom().nextInt(n);
         }
+        if (forced >= 0) chosen = forced;   // after the normal path, so the forced-same branch draws the same randomness
         if (LearnLog.enabled()) {
             int[] abs = new int[seats.size()];
             for (int i = 0; i < seats.size(); i++) abs[i] = seatNumber(seats.get(i));
             PhaseType ph = ai.getGame().getPhaseHandler().getPhase();
             LearnLog.decision(SPELL_CHOICE, seatNumber(ai), ai.getGame().getPhaseHandler().getTurn(), ph == null ? 0 : ph.ordinal(),
-                    abs, cands, chosen, 0, learned ? "learned" : (explore ? "explore" : "stock"), x, xa);
+                    abs, cands, chosen, 0, forced >= 0 ? "fork" : learned ? "learned" : (explore ? "explore" : "stock"), x, xa);
         }
+        if (forced >= 0) forkReseed();
         return chosen == n - 1 ? null : approved.get(chosen);
     }
 
