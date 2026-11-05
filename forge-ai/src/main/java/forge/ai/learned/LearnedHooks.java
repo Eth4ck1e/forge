@@ -55,7 +55,40 @@ public final class LearnedHooks {
     private static boolean hookOn(Player ai, AiProps prop) {
         if (!(ai.getController() instanceof PlayerControllerAi)) return false;
         AiController aic = ((PlayerControllerAi) ai.getController()).getAi();
-        return aic.getBoolProperty(AiProps.LEARNED_HOOKS) && aic.getBoolProperty(prop);
+        if (!aic.getBoolProperty(AiProps.LEARNED_HOOKS) || !aic.getBoolProperty(prop)) return false;
+        ensureModelsLoaded(aic);
+        return true;
+    }
+
+    private static volatile boolean profileModelsTried = false;
+
+    /**
+     * GUI and any run without {@code -model}: load the scorers named by the profile's LEARNED_MODEL
+     * ("spell_choice=learned/spell_choice.onnx;attack_target=..."), paths relative to the AI profile folder
+     * (res/ai) unless absolute. Done once per process, on the first hooked decision of a Learned seat.
+     */
+    private static void ensureModelsLoaded(AiController aic) {
+        if (profileModelsTried) return;
+        synchronized (LearnedHooks.class) {
+            if (profileModelsTried) return;
+            profileModelsTried = true;
+            String spec = aic.getProperty(AiProps.LEARNED_MODEL);
+            if (spec == null || spec.trim().isEmpty()) return;
+            for (String part : spec.split(";")) {
+                int eq = part.indexOf('=');
+                if (eq < 0) continue;
+                String hook = part.substring(0, eq).trim(); String path = part.substring(eq + 1).trim();
+                if (SCORERS.containsKey(hook)) continue;   // -model on the command line wins
+                java.io.File f = new java.io.File(path);
+                if (!f.isAbsolute() && forge.ai.AiProfileUtil.getProfileDir() != null) f = new java.io.File(forge.ai.AiProfileUtil.getProfileDir(), path);
+                try {
+                    SCORERS.put(hook, new OnnxScorer(f.getPath()));
+                    System.out.println("learned-ai: loaded " + hook + " model " + f.getPath());
+                } catch (Exception e) {
+                    System.err.println("learned-ai: could not load " + hook + " model " + f.getPath() + ": " + e);
+                }
+            }
+        }
     }
 
     /**

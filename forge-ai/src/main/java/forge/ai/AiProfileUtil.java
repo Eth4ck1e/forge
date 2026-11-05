@@ -44,6 +44,9 @@ public class AiProfileUtil {
     private static String AI_PROFILE_DIR;
     private static final String AI_PROFILE_EXT = ".ai";
 
+    /** learned-ai: where profile-relative model paths (LEARNED_MODEL) resolve from. */
+    public static String getProfileDir() { return AI_PROFILE_DIR; }
+
     public static final String AI_PROFILE_RANDOM_MATCH = "Random (Every Match)";
     public static final String AI_PROFILE_RANDOM_DUEL = "Random (Every Game)";
 

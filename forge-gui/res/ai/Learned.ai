@@ -353,5 +353,5 @@ FLAT_MC_REACTIVE=true
 # learned-ai (D16): decisions taken by the learned model when a model is loaded; the stock profiles never set these
 LEARNED_HOOKS=true
 LEARNED_ATTACK_TARGET=true
-LEARNED_MODEL=
+LEARNED_MODEL=spell_choice=learned/spell_choice.onnx
 LEARNED_SPELL_CHOICE=true
