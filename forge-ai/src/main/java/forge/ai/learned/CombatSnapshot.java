@@ -89,9 +89,16 @@ import forge.game.zone.ZoneType;
  *   the attacker as at the first damage step, where d* and {@code cmdr} (commander damage received) are the change
  *   from just before the first combat damage step to this moment (so lifelink, damage triggers and anything resolved
  *   in the damage steps are included; attack/block triggers before damage are not), and {@code died}
- *   [{id, tok, seat}] = creatures put into a graveyard from the battlefield since just before the first combat damage
- *   step (any cause, tokens included; seat = controller when it died). For "late" records from a later turn
- *   {@code died} is omitted.</li>
+ *   [{id, tok, seat, cmb, to, how}] = every creature that was on the battlefield at the first combat damage step, was a
+ *   combatant at any damage step, or left the battlefield since then, and is not on the battlefield at this moment
+ *   (after the damage steps' state-based actions; any cause and destination, tokens and commanders included; seat =
+ *   controller when it left). {@code cmb} 1 = combatant at some damage step; {@code to} = where it is now: "gy",
+ *   "exile", "cmd", "hand", "lib", "none" (token ceased to exist, or its owner left the game); {@code how} (best
+ *   effort): "toughness" (toughness 0 or less when it left), "damage" (lethal damage marked), "deathtouch" (assigned
+ *   combat damage by a deathtouch source), "lost" (owner left the game), "exile", "bounce", "cmd", or "other"
+ *   (destroyed, sacrificed, ...). For "late" records from a later turn {@code died} is omitted.
+ *   (Fixed 2026-11-05: up to e8aa32d1b07 {@code died} came from the graveyards' "added from battlefield" lists and
+ *   missed deaths, e.g. commanders sent to the command zone; it had only {id, tok, seat}.)</li>
  * </ul>
  */
 public final class CombatSnapshot {
@@ -432,8 +439,39 @@ public final class CombatSnapshot {
     private static int pTurn, pSteps;
     private static List<Player> pSeats;
     private static int[] pLife, pPoison, pCmdr;
-    private static List<Player> pGravePlayers;
-    private static int[] pGrave;   // per registered player: size of graveyard "entered from battlefield this turn"
+    // creatures to check at the result point: every creature on the battlefield at the first damage step plus every
+    // combatant of every damage step, keyed by id (insertion order = log order); plus the game's left-battlefield LKI
+    // list from this index on (creatures that entered during combat and left again)
+    private static Map<Integer, Tracked> pTracked;
+    private static int pLeftBf;
+
+    private static final class Tracked {
+        Card card;          // the battlefield object last seen (keeps its marked damage after it leaves)
+        int seat;
+        boolean tok, cmb, dt;   // token; combatant at some damage step; assigned damage by a deathtouch source
+        Tracked(Card c) { card = c; }
+    }
+
+    private static Tracked track(Card c) {
+        Tracked t = pTracked.get(c.getId());
+        if (t == null) { t = new Tracked(c); pTracked.put(c.getId(), t); }
+        t.card = c; t.tok = c.isToken();
+        t.seat = c.getController() == null ? 0 : LearnedHooks.seatNumber(c.getController());
+        return t;
+    }
+
+    /** Per damage step: combatants and the creatures hit by a deathtouch source in the assigned damage table. */
+    private static void trackStep(Combat combat) {
+        for (Card a : combat.getAttackers()) track(a).cmb = true;
+        for (Card b : combat.getAllBlockers()) track(b).cmb = true;
+        for (Table.Cell<Card, GameEntity, Integer> cell : combat.getAssignedCombatDamage().cellSet()) {
+            Card src = cell.getRowKey();
+            if (src == null || !(cell.getColumnKey() instanceof Card) || cell.getValue() == null || cell.getValue() <= 0) continue;
+            if (!src.hasKeyword(Keyword.DEATHTOUCH)) continue;
+            Card to = (Card) cell.getColumnKey();
+            if (to.isCreature()) track(to).dt = true;
+        }
+    }
 
     private static int cmdrTotal(Player p) {
         int n = 0;
@@ -443,7 +481,7 @@ public final class CombatSnapshot {
 
     private static synchronized void resultBaseline(Combat combat) {
         if (pCombat != null && pCombat != combat) flushPending("late");
-        if (pCombat == combat) { pSteps++; return; }
+        if (pCombat == combat) { pSteps++; trackStep(combat); return; }
         Player atk = combat.getAttackingPlayer();
         Game game = atk.getGame();
         pCombat = combat; pGame = game; pTurn = game.getPhaseHandler().getTurn(); pSteps = 1;
@@ -454,9 +492,10 @@ public final class CombatSnapshot {
             Player p = pSeats.get(i);
             pLife[i] = p.getLife(); pPoison[i] = p.getPoisonCounters(); pCmdr[i] = cmdrTotal(p);
         }
-        pGravePlayers = new ArrayList<>(game.getRegisteredPlayers());
-        pGrave = new int[pGravePlayers.size()];
-        for (int i = 0; i < pGrave.length; i++) pGrave[i] = pGravePlayers.get(i).getZone(ZoneType.Graveyard).getCardsAddedThisTurn(ZoneType.Battlefield).size();
+        pTracked = new java.util.LinkedHashMap<>();
+        for (Card c : game.getCardsIn(ZoneType.Battlefield)) if (c.isCreature()) track(c);
+        trackStep(combat);
+        pLeftBf = game.getLeftBattlefieldThisTurn().size();
         // per-commander baseline for cmdrBy
         pCmdrBy = new java.util.IdentityHashMap<>();
         for (Player p : pSeats) {
@@ -487,13 +526,13 @@ public final class CombatSnapshot {
         } catch (RuntimeException e) {
             System.err.println("learnlog combat_result: " + e);
         } finally {
-            pCombat = null; pGame = null; pSeats = null; pGravePlayers = null; pCmdrBy = null;
+            pCombat = null; pGame = null; pSeats = null; pTracked = null; pCmdrBy = null;
         }
     }
 
     /** Drops the pending result without writing it (a new game started). */
     static synchronized void resetPending() {
-        pCombat = null; pGame = null; pSeats = null; pGravePlayers = null; pCmdrBy = null;
+        pCombat = null; pGame = null; pSeats = null; pTracked = null; pCmdrBy = null;
     }
 
     private static String resultJson(String at) {
@@ -525,17 +564,47 @@ public final class CombatSnapshot {
         }
         sb.append(']');
         if (turn == pTurn) {
+            // died = every tracked creature (or creature that left the battlefield since the first damage step) that is
+            // not on the battlefield now; read after the damage steps' state-based actions, whatever path removed it
+            java.util.Set<Integer> onBf = new java.util.HashSet<>();
+            for (Card c : pGame.getCardsIn(ZoneType.Battlefield)) onBf.add(c.getId());
+            Map<Integer, Card> lki = new java.util.HashMap<>();
+            List<Card> left = pGame.getLeftBattlefieldThisTurn();
+            for (int k = Math.min(pLeftBf, left.size()); k < left.size(); k++) {
+                Card l = left.get(k);
+                if (l == null) continue;
+                lki.put(l.getId(), l);
+                if (!pTracked.containsKey(l.getId()) && l.isCreature()) track(l);
+            }
             sb.append(",\"died\":[");
             boolean first = true;
-            for (int i = 0; i < pGravePlayers.size(); i++) {
-                List<Card> added = pGravePlayers.get(i).getZone(ZoneType.Graveyard).getCardsAddedThisTurn(ZoneType.Battlefield);
-                for (int k = pGrave[i]; k < added.size(); k++) {
-                    Card c = added.get(k);
-                    if (!c.isCreature()) continue;
-                    if (!first) sb.append(','); first = false;
-                    sb.append("{\"id\":").append(c.getId()).append(",\"tok\":").append(c.isToken() ? 1 : 0)
-                      .append(",\"seat\":").append(c.getController() == null ? 0 : LearnedHooks.seatNumber(c.getController())).append('}');
-                }
+            for (Map.Entry<Integer, Tracked> e : pTracked.entrySet()) {
+                int id = e.getKey();
+                if (onBf.contains(id)) continue;
+                Tracked t = e.getValue();
+                Card l = lki.get(id);
+                Card now = pGame.findById(id);
+                ZoneType z = now == null || now.getZone() == null ? null : now.getZone().getZoneType();
+                if (z == ZoneType.Battlefield) continue;
+                String to = z == null ? "none" : z == ZoneType.Graveyard ? "gy" : z == ZoneType.Exile ? "exile"
+                        : z == ZoneType.Hand ? "hand" : z == ZoneType.Library ? "lib" : z == ZoneType.Command ? "cmd" : z.name().toLowerCase();
+                if (l != null && l.getController() != null) t.seat = LearnedHooks.seatNumber(l.getController());
+                Player owner = t.card.getOwner();
+                int dmg = t.card.getDamage();
+                int lethal = l != null ? l.getLethal() : t.card.getLethal();
+                String how;
+                if (l != null && l.getNetToughness() <= 0) how = "toughness";
+                else if (dmg > 0 && lethal <= dmg) how = "damage";
+                else if (t.dt) how = "deathtouch";
+                else if (z == null && owner != null && owner.hasLost()) how = "lost";
+                else if (z == ZoneType.Graveyard || (z == null && t.tok)) how = "other";   // destroy, sacrifice, ...
+                else if (z == ZoneType.Exile) how = "exile";
+                else if (z == ZoneType.Hand || z == ZoneType.Library) how = "bounce";
+                else if (z == ZoneType.Command) how = "cmd";
+                else how = "other";
+                if (!first) sb.append(','); first = false;
+                sb.append("{\"id\":").append(id).append(",\"tok\":").append(t.tok ? 1 : 0).append(",\"seat\":").append(t.seat)
+                  .append(",\"cmb\":").append(t.cmb ? 1 : 0).append(",\"to\":\"").append(to).append("\",\"how\":\"").append(how).append("\"}");
             }
             sb.append(']');
         }
