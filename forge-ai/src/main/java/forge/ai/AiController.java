@@ -1449,7 +1449,8 @@ public class AiController {
                 block.assignBlockersForCombat(combat);
                 // learned-ai D19: snapshot of the board and the blocks just declared, for the offline combat solver
                 if (forge.ai.learned.LearnLog.enabled() && defender == player) {
-                    forge.ai.learned.LearnLog.raw("combat_snapshot", forge.ai.learned.CombatSnapshot.json(defender, combat, "blockers"));
+                    forge.ai.learned.LearnLog.raw("combat_snapshot", forge.ai.learned.LearnedHooks.transparently(defender, forge.ai.learned.LearnedHooks.ATTACK_TARGET,
+                            () -> forge.ai.learned.CombatSnapshot.json(defender, combat, "blockers")));   // learned-ai: stock-with-logging seats unchanged
                 }
             } catch (AITimeoutTracker.Expired e) {
                 // out of time: keep the blocks decided so far (each block is added atomically, so combat stays consistent)
@@ -1549,7 +1550,8 @@ public class AiController {
             }
             // learned-ai D19: exact combat snapshot with the declaration, for the offline combat solver
             if (forge.ai.learned.LearnLog.enabled() && attacker == player) {
-                forge.ai.learned.LearnLog.raw("combat_snapshot", forge.ai.learned.CombatSnapshot.json(attacker, combat, "attackers"));
+                forge.ai.learned.LearnLog.raw("combat_snapshot", forge.ai.learned.LearnedHooks.transparently(attacker, forge.ai.learned.LearnedHooks.ATTACK_TARGET,
+                            () -> forge.ai.learned.CombatSnapshot.json(attacker, combat, "attackers")));   // learned-ai: stock-with-logging seats unchanged
             }
         } catch (AITimeoutTracker.Expired e) {
             // out of time: attack with what was decided so far; the validity check below repairs an illegal declaration
@@ -1974,8 +1976,16 @@ public class AiController {
         } else if (forge.ai.learned.LearnedHooks.spellChoiceActive(player)) {
             // learned-ai H1 (D16/D17): collect the first few plays the heuristics approve (the first is the stock choice)
             // and let the hook log them, explore, or score them with the learned model; null means pass
-            final List<SpellAbility> approved = chooseSpellAbilitiesToPlayFromList(saList, true, forge.ai.learned.LearnedHooks.spellCandidates);
-            chosenSa = forge.ai.learned.LearnedHooks.spellChoice(player, approved);
+            if (forge.ai.learned.LearnedHooks.transparentSpellChoice(player)) {
+                // learned-ai: stock-with-logging seat (-model none): log from a saved state, then play exactly stock
+                final List<SpellAbility> all = new ArrayList<>(saList);   // the collection sorts its list in place
+                forge.ai.learned.LearnedHooks.logSpellChoiceTransparently(player,
+                        () -> chooseSpellAbilitiesToPlayFromList(all, true, forge.ai.learned.LearnedHooks.spellCandidates));
+                chosenSa = chooseSpellAbilityToPlayFromList(saList, true);
+            } else {
+                final List<SpellAbility> approved = chooseSpellAbilitiesToPlayFromList(saList, true, forge.ai.learned.LearnedHooks.spellCandidates);
+                chosenSa = forge.ai.learned.LearnedHooks.spellChoice(player, approved);
+            }
         } else {
             chosenSa = chooseSpellAbilityToPlayFromList(saList, true);
         }

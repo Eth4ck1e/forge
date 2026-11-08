@@ -133,8 +133,14 @@ public final class LearnedHooks {
         COUNTS.clear();
     }
 
+    /**
+     * {@code -model [seatN:]hook=none} (or bare {@code none}): the seat plays exactly stock for that hook while its
+     * learned logging stays on (records carry model "stock"); stops the lookup, so the profile LEARNED_MODEL is not loaded.
+     */
+    public static final Scorer NONE = named("none", (x, xa) -> { throw new IllegalStateException("NONE scorer"); });
+
     public static void setScorer(String hook, Scorer s) { if (s == null) SCORERS.remove(hook); else SCORERS.put(hook, s); }
-    public static Scorer scorer(String hook) { return SCORERS.get(hook); }
+    public static Scorer scorer(String hook) { Scorer s = SCORERS.get(hook); return s == NONE ? null : s; }
     /** D36: seat-specific scorer ({@code -model seatN:hook=...}); null removes it. */
     public static void setSeatScorer(int seat, String hook, Scorer s) {
         java.util.Map<String, Scorer> m = SEAT_SCORERS.computeIfAbsent(seat, k -> new java.util.concurrent.ConcurrentHashMap<>());
@@ -164,6 +170,12 @@ public final class LearnedHooks {
      * {@code -model}, then the seat's own profile LEARNED_MODEL. Null when none (the seat plays stock).
      */
     public static Scorer scorerFor(int seat, String hook) {
+        Scorer s = lookup(seat, hook);
+        return s == NONE ? null : s;
+    }
+
+    /** {@link #scorerFor} without resolving {@link #NONE} (an explicit "no model" still blocks the profile fallback). */
+    private static Scorer lookup(int seat, String hook) {
         java.util.Map<String, Scorer> m = SEAT_SCORERS.get(seat);
         Scorer s = m == null ? null : m.get(hook);
         if (s != null) return s;
@@ -235,7 +247,7 @@ public final class LearnedHooks {
                 int eq = part.indexOf('=');
                 if (eq < 0) continue;
                 String hook = part.substring(0, eq).trim(); String path = part.substring(eq + 1).trim();
-                if (scorerFor(seat, hook) != null) continue;   // -model on the command line wins (seat-prefixed or not)
+                if (lookup(seat, hook) != null) continue;   // -model on the command line wins (seat-prefixed or not; none too)
                 java.io.File f = new java.io.File(path);
                 if (!f.isAbsolute() && forge.ai.AiProfileUtil.getProfileDir() != null) f = new java.io.File(forge.ai.AiProfileUtil.getProfileDir(), path);
                 try {
@@ -250,15 +262,19 @@ public final class LearnedHooks {
             PROFILE_SCORERS.put(seat, mine);
             if (announce) {
                 // D36: one line per seat per hooked model at game start, naming where the model came from
+                java.util.List<String> stockHooks = new java.util.ArrayList<>();
                 for (String hook : new String[] {SPELL_CHOICE, ATTACK_TARGET}) {
-                    Scorer sc = scorerFor(seat, hook);
+                    Scorer sc = lookup(seat, hook);
+                    if (sc == null || sc == NONE) { stockHooks.add(hook); }
                     if (sc == null) continue;
                     java.util.Map<String, Scorer> sm = SEAT_SCORERS.get(seat);
                     String src = sm != null && sm.get(hook) == sc ? "seat" : SCORERS.get(hook) == sc ? "global" : "profile";
                     AiProps prop = SPELL_CHOICE.equals(hook) ? AiProps.LEARNED_SPELL_CHOICE : AiProps.LEARNED_ATTACK_TARGET;
                     System.out.println("SIMNOTE learned seat=" + seat + " hook=" + hook + " model=" + sc.id() + " src=" + src
-                            + (aic.getBoolProperty(prop) ? "" : " (hook off in profile; seat plays stock)"));
+                            + (sc == NONE ? " (stock with logging)" : aic.getBoolProperty(prop) ? "" : " (hook off in profile; seat plays stock)"));
                 }
+                if (stockHooks.size() == 2)
+                    System.out.println("SIMNOTE learned seat=" + seat + " stock-with-logging (no model for " + stockHooks + "; plays as stock, records pilot=stock)");
             }
         }
     }
@@ -273,6 +289,10 @@ public final class LearnedHooks {
      * @param stock the opponent the stock rule picked
      */
     public static Player attackTarget(Player ai, List<Player> opponents, Map<Player, Integer> threat, Player stock) {
+        return transparently(ai, ATTACK_TARGET, () -> attackTarget0(ai, opponents, threat, stock));
+    }
+
+    private static Player attackTarget0(Player ai, List<Player> opponents, Map<Player, Integer> threat, Player stock) {
         boolean declaring = DECLARING.get() == ai;
         boolean on = hookOn(ai, AiProps.LEARNED_ATTACK_TARGET);   // loads profile models if not yet loaded
         Scorer scorer = scorerFor(seatNumber(ai), ATTACK_TARGET);   // D36: per seat
@@ -318,6 +338,185 @@ public final class LearnedHooks {
     /** Whether the spell-choice hook needs the list of approved plays (logging, exploration or a loaded model). */
     public static boolean spellChoiceActive(Player ai) {
         return LearnLog.enabled() || forkConfigured || exploreRate(SPELL_CHOICE) > 0 || (hookOn(ai, AiProps.LEARNED_SPELL_CHOICE) && scorerFor(seatNumber(ai), SPELL_CHOICE) != null);
+    }
+
+    /**
+     * Stock-with-logging seat ({@code -model none}): its spell_choice record must not change its play. Collecting the
+     * extra approved plays runs AI checks that draw randomness and bump id counters, so stock play with logging would
+     * drift from stock play without it. Such a seat logs from a saved state ({@link #logSpellChoiceTransparently})
+     * and then plays the plain stock pick. Not with forks or exploration (those need the collected list to play).
+     */
+    public static boolean transparentSpellChoice(Player ai) {
+        return LearnLog.enabled() && !forkConfigured && exploreRate(SPELL_CHOICE) <= 0 && lookup(seatNumber(ai), SPELL_CHOICE) == NONE;
+    }
+
+    /** Collects and logs the candidates, then puts randomness, id counters, timestamp/card ids, AI memories and AiCache back. */
+    public static void logSpellChoiceTransparently(Player ai, java.util.function.Supplier<List<forge.game.spellability.SpellAbility>> collect) {
+        transparently(ai, SPELL_CHOICE, () -> spellChoice(ai, collect.get()));
+    }
+
+    /**
+     * Runs {@code work} (feature extraction / a record) for seat {@code ai}; when the seat is stock-with-logging for
+     * {@code hook} (-model none, learn log on, no fork or exploration) the draw state is put back afterwards, so the
+     * record leaves the seat's play exactly stock. Otherwise runs it as is.
+     */
+    public static <T> T transparently(Player ai, String hook, java.util.function.Supplier<T> work) {
+        if (!(LearnLog.enabled() && !forkConfigured && exploreRate(hook) <= 0 && lookup(seatNumber(ai), hook) == NONE)) return work.get();
+        final Object[] snap = saveDrawState(ai.getGame());
+        try {
+            return work.get();
+        } finally {
+            restoreDrawState(ai.getGame(), snap);
+        }
+    }
+
+    private static final String[][] STATIC_COUNTERS = {
+            {"forge.game.Game", "maxId"}, {"forge.game.spellability.SpellAbility", "maxId"},
+            {"forge.game.spellability.SpellAbilityStackInstance", "maxId"}, {"forge.game.trigger.Trigger", "maxId"},
+            {"forge.game.replacement.ReplacementEffect", "maxId"}, {"forge.game.staticability.StaticAbility", "maxId"},
+            {"forge.game.combat.CombatView", "nextId"},
+    };
+
+    private static java.lang.reflect.Field field(String cls, String name) throws Exception {
+        java.lang.reflect.Field f = Class.forName(cls).getDeclaredField(name);
+        f.setAccessible(true);
+        return f;
+    }
+
+    /** [rng copy (null if not copyable), static id counters, game timestamp, cardIdCounter, hiddenCardIdCounter, AI card memories, AiCache]. */
+    private static Object[] saveDrawState(forge.game.Game game) {
+        Object rng = null;
+        try {
+            java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+            try (java.io.ObjectOutputStream oo = new java.io.ObjectOutputStream(bo)) { oo.writeObject(forge.util.MyRandom.getRandom()); }
+            rng = bo.toByteArray();
+        } catch (Exception e) {
+            System.err.println("learned-ai: cannot snapshot the random source (" + e + "); stock-with-logging may drift");
+        }
+        int[] counters = new int[STATIC_COUNTERS.length];
+        int cardId = 0, hiddenId = 0;
+        try {
+            for (int k = 0; k < counters.length; k++) counters[k] = field(STATIC_COUNTERS[k][0], STATIC_COUNTERS[k][1]).getInt(null);
+            cardId = field("forge.game.Game", "cardIdCounter").getInt(game);
+            hiddenId = field("forge.game.Game", "hiddenCardIdCounter").getInt(game);
+        } catch (Exception e) {
+            throw new IllegalStateException("learned-ai: id counters not found: " + e, e);
+        }
+        return new Object[] {rng, counters, game.getTimestamp(), cardId, hiddenId, saveMemories(game), saveAiCache(), saveControllers(game)};
+    }
+
+    /** Mutable AiController fields (shallow): the predicted combat and other per-priority caches evaluation fills. */
+    private static final java.util.List<java.lang.reflect.Field> CONTROLLER_FIELDS = new ArrayList<>();
+    static {
+        for (java.lang.reflect.Field f : AiController.class.getDeclaredFields()) {
+            int m = f.getModifiers();
+            if (java.lang.reflect.Modifier.isStatic(m) || java.lang.reflect.Modifier.isFinal(m)) continue;
+            f.setAccessible(true);
+            CONTROLLER_FIELDS.add(f);
+        }
+    }
+
+    private static java.util.Map<AiController, Object[]> saveControllers(forge.game.Game game) {
+        java.util.Map<AiController, Object[]> all = new java.util.IdentityHashMap<>();
+        for (Player p : game.getRegisteredPlayers()) {
+            if (!(p.getController() instanceof PlayerControllerAi)) continue;
+            AiController aic = ((PlayerControllerAi) p.getController()).getAi();
+            Object[] v = new Object[CONTROLLER_FIELDS.size()];
+            try {
+                for (int k = 0; k < v.length; k++) v[k] = CONTROLLER_FIELDS.get(k).get(aic);
+            } catch (IllegalAccessException e) {
+                throw new IllegalStateException("learned-ai: AiController fields: " + e, e);
+            }
+            all.put(aic, v);
+        }
+        return all;
+    }
+
+    private static void restoreControllers(java.util.Map<AiController, Object[]> all) {
+        try {
+            for (java.util.Map.Entry<AiController, Object[]> e : all.entrySet())
+                for (int k = 0; k < e.getValue().length; k++) CONTROLLER_FIELDS.get(k).set(e.getKey(), e.getValue()[k]);
+        } catch (IllegalAccessException ex) {
+            throw new IllegalStateException("learned-ai: AiController fields: " + ex, ex);
+        }
+    }
+
+    /** AiCache (global: board evaluations, life-in-danger) fills while the AI evaluates; a hit skips the random draws. */
+    @SuppressWarnings("unchecked")
+    private static com.google.common.collect.Multimap<Object, Object> aiCache() {
+        try {
+            return (com.google.common.collect.Multimap<Object, Object>) field("forge.ai.AiCache", "dataMap").get(null);
+        } catch (Exception e) {
+            throw new IllegalStateException("learned-ai: AiCache.dataMap not found: " + e, e);
+        }
+    }
+
+    private static com.google.common.collect.Multimap<Object, Object> saveAiCache() {
+        com.google.common.collect.Multimap<Object, Object> live = aiCache();
+        synchronized (live) { return com.google.common.collect.ArrayListMultimap.create(live); }
+    }
+
+    private static void restoreAiCache(com.google.common.collect.Multimap<Object, Object> was) {
+        com.google.common.collect.Multimap<Object, Object> live = aiCache();
+        synchronized (live) { live.clear(); live.putAll(was); }
+    }
+
+    /** The AI card memory of every AI seat (AI checks remember cards while they evaluate a play). */
+    @SuppressWarnings("unchecked")
+    private static java.util.Map<Object, java.util.Map<Object, java.util.Set<Object>>> saveMemories(forge.game.Game game) {
+        java.util.Map<Object, java.util.Map<Object, java.util.Set<Object>>> all = new java.util.IdentityHashMap<>();
+        for (Player p : game.getRegisteredPlayers()) {
+            if (!(p.getController() instanceof PlayerControllerAi)) continue;
+            java.util.Map<Object, java.util.Set<Object>> live = memoryMap(((PlayerControllerAi) p.getController()).getAi().getCardMemory());
+            java.util.Map<Object, java.util.Set<Object>> copy = new java.util.HashMap<>();
+            for (java.util.Map.Entry<Object, java.util.Set<Object>> e : live.entrySet()) copy.put(e.getKey(), new java.util.HashSet<>(e.getValue()));
+            all.put(live, copy);
+        }
+        return all;
+    }
+
+    private static void restoreMemories(java.util.Map<Object, java.util.Map<Object, java.util.Set<Object>>> all) {
+        for (java.util.Map.Entry<Object, java.util.Map<Object, java.util.Set<Object>>> e : all.entrySet()) {
+            @SuppressWarnings("unchecked")
+            java.util.Map<Object, java.util.Set<Object>> live = (java.util.Map<Object, java.util.Set<Object>>) e.getKey();
+            for (java.util.Map.Entry<Object, java.util.Set<Object>> m : live.entrySet()) {
+                java.util.Set<Object> was = e.getValue().get(m.getKey());
+                m.getValue().retainAll(was == null ? java.util.Collections.emptySet() : was);
+                if (was != null) m.getValue().addAll(was);
+            }
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static java.util.Map<Object, java.util.Set<Object>> memoryMap(forge.ai.AiCardMemory mem) {
+        try {
+            return (java.util.Map<Object, java.util.Set<Object>>) ((com.google.common.base.Supplier<?>) field("forge.ai.AiCardMemory", "memoryMap").get(mem)).get();
+        } catch (Exception e) {
+            throw new IllegalStateException("learned-ai: AiCardMemory.memoryMap not found: " + e, e);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void restoreDrawState(forge.game.Game game, Object[] snap) {
+        if (snap[0] != null) {
+            try (java.io.ObjectInputStream oi = new java.io.ObjectInputStream(new java.io.ByteArrayInputStream((byte[]) snap[0]))) {
+                forge.util.MyRandom.setRandom((java.util.Random) oi.readObject());
+            } catch (Exception e) {
+                throw new IllegalStateException("learned-ai: cannot restore the random source: " + e, e);
+            }
+        }
+        try {
+            int[] counters = (int[]) snap[1];
+            for (int k = 0; k < counters.length; k++) field(STATIC_COUNTERS[k][0], STATIC_COUNTERS[k][1]).setInt(null, counters[k]);
+            game.dangerouslySetTimestamp((Long) snap[2]);
+            field("forge.game.Game", "cardIdCounter").setInt(game, (Integer) snap[3]);
+            field("forge.game.Game", "hiddenCardIdCounter").setInt(game, (Integer) snap[4]);
+            restoreMemories((java.util.Map<Object, java.util.Map<Object, java.util.Set<Object>>>) snap[5]);
+            restoreAiCache((com.google.common.collect.Multimap<Object, Object>) snap[6]);
+            restoreControllers((java.util.Map<AiController, Object[]>) snap[7]);
+        } catch (Exception e) {
+            throw new IllegalStateException("learned-ai: cannot restore id counters: " + e, e);
+        }
     }
 
     /**

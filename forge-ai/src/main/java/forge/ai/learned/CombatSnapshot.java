@@ -372,8 +372,11 @@ public final class CombatSnapshot {
             Player atk = combat.getAttackingPlayer();
             Game game = atk.getGame();
             if (game.isSimulationCopy() || !LearnLog.enabled()) return;
-            resultBaseline(combat);   // before the record, so a "late" result of an earlier combat is written first
-            LearnLog.raw("combat_damage", damageJson(combat, firstStrike));
+            LearnedHooks.transparently(atk, LearnedHooks.ATTACK_TARGET, () -> {   // stock-with-logging attacker: play unchanged
+                resultBaseline(combat);   // before the record, so a "late" result of an earlier combat is written first
+                LearnLog.raw("combat_damage", damageJson(combat, firstStrike));
+                return null;
+            });
         } catch (RuntimeException e) {
             System.err.println("learnlog combat_damage: " + e);   // never let logging disturb the game
         }
@@ -511,7 +514,7 @@ public final class CombatSnapshot {
         try {
             synchronized (CombatSnapshot.class) {
                 if (pCombat != combat) return;   // no combat damage was dealt in this combat (or a simulation copy)
-                flushPending("end");
+                LearnedHooks.transparently(combat.getAttackingPlayer(), LearnedHooks.ATTACK_TARGET, () -> { flushPending("end"); return null; });
             }
         } catch (RuntimeException e) {
             System.err.println("learnlog combat_result: " + e);

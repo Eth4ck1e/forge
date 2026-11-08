@@ -271,11 +271,22 @@ public class SimulateMatch {
                             throw new IllegalArgumentException("seat numbers start at 1: " + spec);
                         }
                     }
+                    // learned-ai: "none" = no model (exactly stock play, logging kept); bare "none" covers every hook
+                    if ("none".equals(spec)) {
+                        for (String h : new String[] {forge.ai.learned.LearnedHooks.SPELL_CHOICE, forge.ai.learned.LearnedHooks.ATTACK_TARGET}) {
+                            if (seatN > 0) forge.ai.learned.LearnedHooks.setSeatScorer(seatN, h, forge.ai.learned.LearnedHooks.NONE);
+                            else forge.ai.learned.LearnedHooks.setScorer(h, forge.ai.learned.LearnedHooks.NONE);
+                        }
+                        System.out.println("SIMNOTE learned model " + (seatN > 0 ? "seat" + seatN + " " : "") + "none (stock play with logging; profile LEARNED_MODEL not loaded)");
+                        continue;
+                    }
                     final int eq = spec.indexOf('=');
                     final String hook = eq < 0 ? forge.ai.learned.LearnedHooks.ATTACK_TARGET : spec.substring(0, eq);
                     final String modelPath = eq < 0 ? spec : spec.substring(eq + 1);
                     final forge.ai.learned.LearnedHooks.Scorer sc;
-                    if ("random".equals(modelPath)) {
+                    if ("none".equals(modelPath)) {
+                        sc = forge.ai.learned.LearnedHooks.NONE;   // learned-ai: this hook plays stock, logging kept
+                    } else if ("random".equals(modelPath)) {
                         // diagnostic: Learned seats pick a uniformly random candidate (calibrates offline policy evaluation)
                         sc = forge.ai.learned.LearnedHooks.named("random", (x, xa) -> {
                             final float[] r = new float[xa.length];
@@ -357,6 +368,7 @@ public class SimulateMatch {
         System.out.println("\tx - Exit the process (code 3) after a wall-clock timeout; the cancelled game thread cannot be stopped.");
         System.out.println("\tat - Per-decision AI time budget in seconds (default 5).");
         System.out.println("\tfork - seat=<n> hook=<spell_choice|attack_target> index=<k> choose=<pos> seed=<s>: force candidate <pos> at the k-th (0-based) logged decision of that seat and hook, then reseed (0 = keep). One -fork flag with all tokens; game 1 only (use -n 1 -s <gameSeed> for a later game). hook=attack_assign: the k-th combat_attack record of a solver seat; pos 0..N-1 = the solver's top-N lines, N = the stock line.");
+        System.out.println("\tmodel - [seat<N>:]<hook>=<path|random|none> (repeatable); none (or bare none / seat<N>:none for every hook) = exactly stock play with learned logging, the profile LEARNED_MODEL is not loaded");
         System.out.println("\tcombat - stock|solver|shadow: attack declaration of every Learned seat (shadow = stock plays, the solver is logged with status shadow) (overrides LEARNED_COMBAT; same as -Dlearned.combat)");
         System.out.println("\timpact - card-impact table (eval/card_impact.py JSON, or CSV name,threat_shrunk) for the combat solver's values and protected pieces");
         System.out.println("\tr - Turn cap in table rounds (rounds * players engine turns); games reaching it are recorded as draws. One SIMRESULT json line is printed per game.");
