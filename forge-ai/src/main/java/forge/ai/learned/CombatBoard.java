@@ -1,20 +1,32 @@
 package forge.ai.learned;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+
+import org.apache.commons.lang3.tuple.Pair;
+
+import com.google.common.collect.Multimap;
+import com.google.common.collect.MultimapBuilder;
+import com.google.common.collect.Multimaps;
 
 import forge.game.Game;
 import forge.game.GameEntity;
 import forge.game.card.Card;
+import forge.game.combat.AttackConstraints;
 import forge.game.combat.AttackRequirement;
 import forge.game.combat.Combat;
 import forge.game.combat.CombatUtil;
 import forge.game.keyword.KeywordInterface;
 import forge.game.player.Player;
+import forge.game.staticability.StaticAbility;
 import forge.game.staticability.StaticAbilityCantAttackBlock;
+import forge.game.staticability.StaticAbilityMustAttack;
 import forge.game.zone.ZoneType;
 
 /**
@@ -35,6 +47,10 @@ public final class CombatBoard {
     public final Map<Card, GameEntity> forced = new LinkedHashMap<>();
     /** why the solver must not be used on this board ("" = usable) */
     public String exotic = "";
+    /** issue #28: forced attackers the stock declaration left out (fixed from the engine's attack requirements) */
+    public final List<Integer> addedForced = new ArrayList<>();
+    /** issue #28: player-level requirements as live defender sets (engine form, for the record / reasons) */
+    public final List<Collection<GameEntity>> playerReqs = new ArrayList<>();
 
     private CombatBoard() {}
 
@@ -83,12 +99,94 @@ public final class CombatBoard {
             }
             b.input.seats.add(s);
         }
+        // issue #28: creatures that must attack ("attacks each combat if able", goad) but are missing from the stock
+        // declaration are fixed too, on the defender of the engine's own legal attack (else their strongest requirement)
+        Map<Card, GameEntity> legal = null;
+        for (Card c : ai.getCreaturesInPlay()) {
+            if (b.forced.containsKey(c) || b.stock.containsKey(c)) continue;
+            AttackRequirement r = reqs.get(c);
+            boolean must = "True".equals(c.getSVar("MustAttack")) || c.isGoaded() || unconditional(r);
+            if (!must || c.isTapped() || !CombatUtil.canAttack(c)) continue;
+            if (legal == null) legal = combat.getAttackConstraints().getLegalAttackers().getLeft();
+            GameEntity d = legal.get(c);
+            if (d == null || !oppDefenders.contains(d) || !CombatUtil.canAttack(c, d) || CombatUtil.getAttackCost(game, c, d) != null) {
+                d = null;
+                int best = -1;
+                List<Pair<GameEntity, Integer>> sorted = r == null ? List.of() : r.getSortedRequirements();
+                for (Pair<GameEntity, Integer> pr : sorted) {   // ascending by count: the last legal one wins
+                    GameEntity x = pr.getLeft();
+                    if (!oppDefenders.contains(x) || !CombatUtil.canAttack(c, x) || CombatUtil.getAttackCost(game, c, x) != null) continue;
+                    if (pr.getRight() >= best) { best = pr.getRight(); d = x; }
+                }
+            }
+            if (d == null) continue;   // not able: no requirement to honour
+            b.forced.put(c, d);
+            b.addedForced.add(c.getId());
+        }
+        // issue #28: per-defender bans (e.g. "can't attack a player it attacked this turn", an attack cost there)
+        Set<Integer> fixedLive = new HashSet<>();
+        for (Card c : b.forced.keySet()) fixedLive.add(c.getId());
+        for (CombatSolver.Creature cr : b.input.seats.get(0).creatures) {
+            if (!cr.canAttack || fixedLive.contains(cr.id)) continue;
+            Card c = b.cards.get(cr.id);
+            Set<CombatSolver.Target> no = new HashSet<>();
+            for (GameEntity d : oppDefenders) {
+                CombatSolver.Target t = b.target(d);
+                if (t != null && (!CombatUtil.canAttack(c, d) || CombatUtil.getAttackCost(game, c, d) != null)) no.add(t);
+            }
+            if (!no.isEmpty()) b.input.noAttack.put(cr.id, no);
+        }
+        // issue #28: player-level requirements ("each opponent must attack with at least one creature", Seeker of Slaanesh)
+        Multimap<GameEntity, StaticAbility> pr = StaticAbilityMustAttack.mustAttackSpecific(ai, combat.getDefenders());
+        if (!pr.isEmpty()) {
+            Multimap<StaticAbility, GameEntity> inv = Multimaps.invertFrom(pr, MultimapBuilder.hashKeys().arrayListValues().build());
+            for (Collection<GameEntity> defs : inv.asMap().values()) {
+                b.playerReqs.add(defs);
+                Set<CombatSolver.Target> ts = new HashSet<>();
+                for (GameEntity d : defs) { CombatSolver.Target t = b.target(d); if (t != null) ts.add(t); }
+                if (!ts.isEmpty()) b.input.mustAttackAny.add(ts);
+            }
+        }
         for (Map.Entry<Card, GameEntity> e : b.forced.entrySet()) {
             CombatSolver.Target t = b.target(e.getValue());
             if (t != null) b.input.fixed.put(e.getKey().getId(), t);
             else if (b.exotic.isEmpty()) b.exotic = "forced-target";
         }
         return b;
+    }
+
+    /** a requirement that holds whatever else attacks (goad, "attacks each combat if able", must attack X) */
+    static boolean unconditional(AttackRequirement r) {
+        if (r == null) return false;
+        for (Pair<GameEntity, Integer> p : r.getSortedRequirements()) if (p.getRight() > 0) return true;
+        return false;
+    }
+
+    /**
+     * issue #28: why the engine rejects this declaration ("" = it accepts it): the same test as
+     * {@link CombatUtil#validateAttackers} (violations no more than the engine's best legal attack), read-only, with the
+     * violated parts named: {@code restriction}, {@code must-attack:<id>} (a forced creature missing or on the wrong
+     * defender), {@code player-must-attack} (no attacker into a player-level requirement).
+     */
+    public static String rejection(Combat combat, Map<Card, GameEntity> attacks, int best) {
+        AttackConstraints cons = combat.getAttackConstraints();
+        int v = cons.countViolations(attacks);
+        if (v == -1) return "restriction";
+        if (v <= best) return "";
+        StringBuilder sb = new StringBuilder();
+        for (Map.Entry<Card, AttackRequirement> e : cons.getRequirements().entrySet()) {
+            AttackRequirement r = e.getValue();
+            if (r == null || !r.hasRequirement() || e.getKey().isTapped() || !CombatUtil.canAttack(e.getKey())) continue;
+            if (r.countViolations(attacks.get(e.getKey()), attacks) > 0) { if (sb.length() > 0) sb.append(';'); sb.append("must-attack:").append(e.getKey().getId()); }
+        }
+        Multimap<GameEntity, StaticAbility> pr = StaticAbilityMustAttack.mustAttackSpecific(combat.getAttackingPlayer(), combat.getDefenders());
+        if (!pr.isEmpty()) {
+            Multimap<StaticAbility, GameEntity> inv = Multimaps.invertFrom(pr, MultimapBuilder.hashKeys().arrayListValues().build());
+            for (Collection<GameEntity> defs : inv.asMap().values())
+                if (java.util.Collections.disjoint(defs, attacks.values())) { if (sb.length() > 0) sb.append(';'); sb.append("player-must-attack"); break; }
+        }
+        if (sb.length() == 0) sb.append("violations:").append(v).append('>').append(best);
+        return sb.toString();
     }
 
     static CombatSolver.Creature creature(Card c) {

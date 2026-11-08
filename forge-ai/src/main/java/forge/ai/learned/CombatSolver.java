@@ -161,6 +161,15 @@ public final class CombatSolver {
         public Map<Integer, Target> fixed = new LinkedHashMap<>();
         /** optional line to score as well (e.g. the stock declaration): attacker id -> target; see {@link Result#compare} */
         public Map<Integer, Target> compare;
+        /** issue #28: per creature id, the targets it may not attack (a per-defender restriction such as "can't attack
+         * a player it attacked this turn", or an attack cost there). Such a creature is its own group and its options
+         * never send it there. Empty = every eligible creature may attack every target (Python). */
+        public Map<Integer, Set<Target>> noAttack = new HashMap<>();
+        /** issue #28: player-level attack requirements ("each opponent must attack with at least one creature each
+         * combat if able", e.g. Seeker of Slaanesh): each set = at least one attacker must attack one of these targets.
+         * Enforced when some eligible creature can attack there: the D22_V1 rule yields to it minimally (one
+         * rule-breaking attacker per unmet requirement) and lines that miss it are dropped. Empty = Python. */
+        public List<Set<Target>> mustAttackAny = new ArrayList<>();
     }
 
     /** One attacker's target: a player seat, or a planeswalker (pwId >= 0) controlled by that seat. */
@@ -217,6 +226,9 @@ public final class CombatSolver {
         public final List<Target> targets = new ArrayList<>();
         /** fixed attackers whose target was honoured */
         public final Set<Integer> fixedIds = new HashSet<>();
+        /** issue #28: per {@link Input#mustAttackAny} entry: 1 = enforced (some line meets it), 0 = no eligible creature
+         * can meet it, -1 = enforceable but no candidate line met it (beam pruning; the caller's validity check decides) */
+        public final List<Integer> reqState = new ArrayList<>();
         /** chosen attackers that break the D22_V1 rule, excused by the line's kill (lethal exemption) */
         public final List<Integer> exempt = new ArrayList<>();
         /** {@link Input#compare} scored by the same objective (null when absent or not representable: an attacker the
@@ -642,7 +654,7 @@ public final class CombatSolver {
             for (Unit u : mine) if (!elig.contains(u.id) && !u.tapped && u.canBlock) baseBlockers.add(u);
             Map<String, List<Unit>> g = new LinkedHashMap<>();
             for (Unit u : eligible) {
-                String key = fixedIds.contains(u.id) ? "f" + u.id : u.sig == null ? "c" + u.id
+                String key = fixedIds.contains(u.id) ? "f" + u.id : banned(u.id) ? "n" + u.id : u.sig == null ? "c" + u.id
                         : P.valueModel == ValueModel.PT ? "s" + u.sig : "s" + u.sig + "|" + u.value + "|" + u.prot;
                 g.computeIfAbsent(key, k -> new ArrayList<>()).add(u);
             }
@@ -661,8 +673,23 @@ public final class CombatSolver {
                 Integer ft = fixedTi.get(u0.id);
                 fixedT[i] = ft == null ? -1 : ft;
                 if (ft != null) { int[] v = new int[T]; v[ft] = 1; List<int[]> one = new ArrayList<>(); one.add(v); options.add(one); }
+                else if (banned(u0.id)) {   // issue #28: never send it where it may not attack
+                    Set<Target> no = in.noAttack.get(u0.id);
+                    List<int[]> keep = new ArrayList<>();
+                    for (int[] v : groupOptions(groups.get(i).size())) {
+                        boolean good = true;
+                        for (int t = 0; t < T; t++) if (v[t] != 0 && no.contains(targets.get(t))) { good = false; break; }
+                        if (good) keep.add(v);
+                    }
+                    options.add(keep);
+                }
                 else options.add(groupOptions(groups.get(i).size()));
                 groupBlocks[i] = u0.canBlock && !u0.tapped;
+            }
+            for (Set<Target> r : in.mustAttackAny) {
+                boolean[] m = new boolean[T]; boolean any = false;
+                for (int t = 0; t < T; t++) if (r.contains(targets.get(t))) { m[t] = true; any = true; }
+                reqMask.add(any ? m : null);
             }
             for (Seat s : opps) {
                 List<Unit> blk = new ArrayList<>(), att = new ArrayList<>();
@@ -699,12 +726,73 @@ public final class CombatSolver {
                     for (int[] v : options.get(gi)) {
                         boolean good = true;
                         for (int t = 0; t < T; t++) if (v[t] != 0 && !ok[t]) { good = false; break; }
+                        // issue #28: a single attacker into a required target stays available against the rule
+                        if (!good && sum(v) == 1) for (int t = 0; t < T; t++) if (v[t] != 0 && inReq(t)) { good = true; break; }
                         if (good) keep.add(v);
                     }
                     options.set(gi, keep);
                 }
             }
+            for (boolean[] m : reqMask) {
+                boolean can = false;
+                if (m != null) for (List<int[]> os : options) for (int[] v : os) for (int t = 0; t < T && !can; t++) if (v[t] != 0 && m[t]) can = true;
+                reqActive.add(can);
+            }
             threats();
+        }
+
+        /** issue #28: per mustAttackAny entry, its targets as a mask (null = none of them is a target here) and whether
+         * some eligible group can attack there */
+        final List<boolean[]> reqMask = new ArrayList<>();
+        final List<Boolean> reqActive = new ArrayList<>();
+
+        boolean banned(int id) { Set<Target> no = in.noAttack.get(id); return no != null && !no.isEmpty(); }
+
+        boolean hasReq() { return reqActive.contains(Boolean.TRUE); }
+
+        private boolean inReq(int t) { for (boolean[] m : reqMask) if (m != null && m[t]) return true; return false; }
+
+        /** every enforceable requirement is met by some attacker of p */
+        boolean meetsReq(Profile p) {
+            for (int r = 0; r < reqMask.size(); r++) {
+                if (!reqActive.get(r)) continue;
+                boolean hit = false;
+                for (int gi = 0; gi < groups.size() && !hit; gi++) for (int t = 0; t < T; t++) if (p.asg[gi][t] != 0 && reqMask.get(r)[t]) { hit = true; break; }
+                if (!hit) return false;
+            }
+            return true;
+        }
+
+        /** a line whose rule-breaking attackers are exactly what the unmet requirements need: each breaker attacks a
+         * required target, and there are no more breakers than requirements the rule-abiding attackers leave unmet */
+        private boolean excusedByReq(Profile p) {
+            int breakers = 0;
+            List<Integer> breakT = new ArrayList<>();
+            boolean[] hitByAbiding = new boolean[reqMask.size()];
+            for (int gi = 0; gi < groups.size(); gi++)
+                for (int t = 0; t < T; t++) {
+                    if (p.asg[gi][t] == 0) continue;
+                    boolean breaks = allowed[gi] != null && !allowed[gi][t];
+                    if (breaks) { breakers += p.asg[gi][t]; breakT.add(t); }
+                    else for (int r = 0; r < reqMask.size(); r++) if (reqActive.get(r) && reqMask.get(r)[t]) hitByAbiding[r] = true;
+                }
+            if (breakers == 0) return true;
+            int unmet = 0;
+            for (int r = 0; r < reqMask.size(); r++) if (reqActive.get(r) && !hitByAbiding[r]) unmet++;
+            if (breakers > unmet) return false;
+            for (int t : breakT) {
+                boolean need = false;
+                for (int r = 0; r < reqMask.size(); r++) if (reqActive.get(r) && !hitByAbiding[r] && reqMask.get(r)[t]) need = true;
+                if (!need) return false;
+            }
+            return true;
+        }
+
+        /** issue #28: admissible() with the requirement excuse (identical to admissible() without requirements) */
+        boolean admissibleReq(Profile p) {
+            if (!hasReq()) return admissible(p);
+            if (lethalExempt && admissible(p)) return true;
+            return excusedByReq(p);
         }
 
         /** per group and target: the D22_V1 verdict as a boolean (null = unrestricted: rule off or fixed group) */
@@ -1186,10 +1274,16 @@ public final class CombatSolver {
             for (int[][] c : cands) if (sameAsg(c, home)) { has = true; break; }
             if (!has) { cands.add(home); profs.addAll(evaluate(ctx, List.<int[][]>of(home))); }
         }
-        if (ctx.lethalExempt) {   // drop rule-breaking lines that no kill excuses (all-home always stays)
+        if (ctx.lethalExempt || ctx.hasReq()) {   // drop rule-breaking lines that no kill / requirement excuses (all-home always stays)
             List<int[][]> c2 = new ArrayList<>(); List<Profile> p2 = new ArrayList<>();
-            for (int i = 0; i < profs.size(); i++) if (ctx.admissible(profs.get(i))) { c2.add(cands.get(i)); p2.add(profs.get(i)); }
+            for (int i = 0; i < profs.size(); i++) if (ctx.admissibleReq(profs.get(i))) { c2.add(cands.get(i)); p2.add(profs.get(i)); }
             cands = c2; profs = p2;
+        }
+        boolean reqMet = true;
+        if (ctx.hasReq()) {   // issue #28: player-level attack requirements; keep every line if none meets them
+            List<int[][]> c2 = new ArrayList<>(); List<Profile> p2 = new ArrayList<>();
+            for (int i = 0; i < profs.size(); i++) if (ctx.meetsReq(profs.get(i))) { c2.add(cands.get(i)); p2.add(profs.get(i)); }
+            if (!p2.isEmpty()) { cands = c2; profs = p2; } else reqMet = false;
         }
         int[] sel = select(profs, P);
         int ci = sel[0];
@@ -1221,6 +1315,7 @@ public final class CombatSolver {
         }
         res.targets.addAll(ctx.targets);
         res.fixedIds.addAll(ctx.fixedIds);
+        for (int r = 0; r < ctx.reqMask.size(); r++) res.reqState.add(!ctx.reqActive.get(r) ? 0 : reqMet ? 1 : -1);
         res.exempt.addAll(ctx.exempted(chosen));
         if (in.compare != null) {
             int[][] asg = new int[G][ctx.T];

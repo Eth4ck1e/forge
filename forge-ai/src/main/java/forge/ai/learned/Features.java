@@ -25,8 +25,9 @@ import forge.game.zone.ZoneType;
 public final class Features {
     // 3 (D36): decision records carry "model"; 4 (D22 phase 2): combat_attack records; 5 (D33): spell_choice candidate
     // features appended (SPELL_EXTRA, old indices unchanged), spell_choice mana/hand fields, turn_end / mana_payment /
-    // mana_lost records
-    public static final int SCHEMA = 5;
+    // mana_lost records; 6 (issue #28): combat_attack fallbackReason / rejected / addedForced / banned / playerReq
+    // (vectors unchanged)
+    public static final int SCHEMA = 6;
     public static final int SEATS = 4;
     /** Creature slots per seat, best first by power. */
     public static final int CREATURE_SLOTS = 6;

@@ -132,32 +132,76 @@ public final class LearnedCombat {
         int chosen = res == null || shadow ? nTop : 0;
         if (forced >= 0) chosen = forced;
         List<String> dropped = new ArrayList<>();
+        // issue #28: every line is checked against the engine's own acceptance test before it is applied (read-only:
+        // AttackConstraints.countViolations vs the best legal attack); a rejected solver line gives way to the next
+        // solver line in rank order (not on a fork: the forced position stands or falls), then to the stock line.
+        List<String> rejected = new ArrayList<>();
+        String fallbackReason = null;
+        int[] bestV = {Integer.MIN_VALUE};
         if (chosen < nTop) {
-            Map<Card, GameEntity> want = new LinkedHashMap<>();
-            for (Map.Entry<Integer, CombatSolver.Target> e : res.top.get(chosen).attacks.entrySet()) {
-                Card c = board.cards.get(e.getKey());
-                GameEntity d = board.defender(e.getValue());
-                if (c == null || d == null || !CombatUtil.canAttack(c, d) || CombatUtil.getAttackCost(ai.getGame(), c, d) != null) {
-                    dropped.add(String.valueOf(e.getKey()));
+            List<Integer> order = new ArrayList<>();
+            order.add(chosen);
+            if (forced < 0) for (int k = 0; k < nTop; k++) if (k != chosen) order.add(k);
+            boolean done = false;
+            for (int k : order) {
+                List<String> drop = new ArrayList<>();
+                Map<Card, GameEntity> want = want(ai, board, res.top.get(k), drop);
+                String why = rejection(combat, want, bestV);
+                if (!why.isEmpty()) { rejected.add("{\"pos\":" + k + ",\"why\":\"" + why + "\"}"); if (fallbackReason == null) fallbackReason = why; continue; }
+                apply(combat, want);
+                if (!CombatUtil.validateAttackers(combat)) {   // belt and braces: the live test disagrees
+                    rejected.add("{\"pos\":" + k + ",\"why\":\"live-invalid\"}");
+                    if (fallbackReason == null) fallbackReason = "live-invalid";
                     continue;
                 }
-                want.put(c, d);
+                chosen = k; dropped = drop; done = true;
+                break;
             }
-            apply(combat, want);
-            if (!CombatUtil.validateAttackers(combat)) {
+            if (!done) {
                 apply(combat, board.stock);
                 status = "invalid->stock";
+                String sw = rejection(combat, board.stock, bestV);
+                if (!sw.isEmpty()) fallbackReason += "|stock:" + sw;   // the stock line is invalid too: AiController repairs it
+                chosen = nTop;
             }
         } else if (res != null) {
             // the stock line itself (fork pos N, or shadow mode): combat already holds it
             status = forced >= 0 ? "applied" : shadow ? "shadow" : status;
+            if (shadow && nTop > 0) {   // what solver mode would have met (nothing is applied)
+                String why = rejection(combat, want(ai, board, res.top.get(0), new ArrayList<>()), bestV);
+                if (!why.isEmpty()) { rejected.add("{\"pos\":0,\"why\":\"" + why + "\"}"); fallbackReason = why; }
+            }
+        } else if (status.startsWith("fallback:")) {
+            fallbackReason = status.substring("fallback:".length());
         }
         if (LearnLog.enabled()) {
             final String st = status; final int ch = chosen; final CombatSolver.Result r = res;   // the record never changes play
+            final List<String> dr = dropped; final String fr = fallbackReason;
             LearnLog.raw("combat_attack", LearnedHooks.transparently(ai, LearnedHooks.ATTACK_TARGET,
-                    () -> record(ai, board, r, st, ch, nTop, forced >= 0 ? "fork" : shadow ? "stock" : "solver", micros, dropped, combat, turn)));
+                    () -> record(ai, board, r, st, ch, nTop, forced >= 0 ? "fork" : shadow ? "stock" : "solver", micros, dr, combat, turn, fr, rejected)));
         }
         if (forced >= 0) LearnedHooks.forkReseed();
+    }
+
+    /** a solver line as live attacks; attackers it may not send there (should not happen since issue #28) go to drop */
+    private static Map<Card, GameEntity> want(Player ai, CombatBoard board, CombatSolver.Line line, List<String> drop) {
+        Map<Card, GameEntity> want = new LinkedHashMap<>();
+        for (Map.Entry<Integer, CombatSolver.Target> e : line.attacks.entrySet()) {
+            Card c = board.cards.get(e.getKey());
+            GameEntity d = board.defender(e.getValue());
+            if (c == null || d == null || !CombatUtil.canAttack(c, d) || CombatUtil.getAttackCost(ai.getGame(), c, d) != null) {
+                drop.add(String.valueOf(e.getKey()));
+                continue;
+            }
+            want.put(c, d);
+        }
+        return want;
+    }
+
+    /** CombatBoard.rejection with the engine's best legal attack computed once per declaration */
+    private static String rejection(Combat combat, Map<Card, GameEntity> attacks, int[] best) {
+        if (best[0] == Integer.MIN_VALUE) best[0] = combat.getAttackConstraints().getLegalAttackers().getRight();
+        return CombatBoard.rejection(combat, attacks, best[0]);
     }
 
     private static void apply(Combat combat, Map<Card, GameEntity> attacks) {
@@ -199,7 +243,8 @@ public final class LearnedCombat {
     }
 
     static String record(Player ai, CombatBoard board, CombatSolver.Result res, String status, int chosen, int nTop,
-                         String pilot, long micros, List<String> dropped, Combat combat, int turn) {
+                         String pilot, long micros, List<String> dropped, Combat combat, int turn,
+                         String fallbackReason, List<String> rejected) {
         StringBuilder sb = new StringBuilder(4096);
         PhaseType ph = ai.getGame().getPhaseHandler().getPhase();
         sb.append("\"seat\":").append(board.input.actingSeat).append(",\"turn\":").append(turn).append(",\"phase\":").append(ph == null ? 0 : ph.ordinal());
@@ -230,6 +275,12 @@ public final class LearnedCombat {
         for (Integer id : board.input.fixed.keySet()) { if (!first) sb.append(','); first = false; sb.append(id); }
         sb.append("],\"dropped\":[").append(String.join(",", dropped)).append(']');
         sb.append(",\"exempt\":").append(res == null ? "[]" : res.exempt.toString().replace(" ", ""));   // lethal exemption
+        // issue #28 (schema 6): why a line was not used, forced attackers the stock left out, requirement state
+        sb.append(",\"fallbackReason\":").append(fallbackReason == null ? "null" : "\"" + fallbackReason.replace("\"", "'") + "\"");
+        sb.append(",\"rejected\":[").append(String.join(",", rejected)).append(']');
+        sb.append(",\"addedForced\":").append(board.addedForced.toString().replace(" ", ""));
+        sb.append(",\"banned\":").append(board.input.noAttack.keySet().toString().replace(" ", ""));
+        sb.append(",\"playerReq\":").append(res == null ? "[]" : res.reqState.toString().replace(" ", ""));
         sb.append(",\"declared\":{");
         first = true;
         for (Card a : combat.getAttackers()) {
