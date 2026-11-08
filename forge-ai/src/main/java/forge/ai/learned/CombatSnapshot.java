@@ -372,7 +372,7 @@ public final class CombatSnapshot {
             Player atk = combat.getAttackingPlayer();
             Game game = atk.getGame();
             if (game.isSimulationCopy() || !LearnLog.enabled()) return;
-            LearnedHooks.transparently(atk, LearnedHooks.ATTACK_TARGET, () -> {   // stock-with-logging attacker: play unchanged
+            LearnedHooks.transparently(atk, LearnedHooks.ATTACK_TARGET, () -> {   // learned-ai: logging never changes play
                 resultBaseline(combat);   // before the record, so a "late" result of an earlier combat is written first
                 LearnLog.raw("combat_damage", damageJson(combat, firstStrike));
                 return null;

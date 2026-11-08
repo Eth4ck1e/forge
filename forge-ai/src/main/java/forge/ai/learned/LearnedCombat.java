@@ -153,7 +153,7 @@ public final class LearnedCombat {
             status = forced >= 0 ? "applied" : shadow ? "shadow" : status;
         }
         if (LearnLog.enabled()) {
-            final String st = status; final int ch = chosen; final CombatSolver.Result r = res;   // a stock-with-logging seat's record must not change its play
+            final String st = status; final int ch = chosen; final CombatSolver.Result r = res;   // the record never changes play
             LearnLog.raw("combat_attack", LearnedHooks.transparently(ai, LearnedHooks.ATTACK_TARGET,
                     () -> record(ai, board, r, st, ch, nTop, forced >= 0 ? "fork" : shadow ? "stock" : "solver", micros, dropped, combat, turn)));
         }

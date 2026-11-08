@@ -116,9 +116,17 @@ public final class LearnedHooks {
         return forkChoose;
     }
 
+    /** Whether the next counted decision of (seat, hook) is the armed fork point (consumes nothing). */
+    static synchronized boolean forkPointNext(String hook, int seat) {
+        if (!forkConfigured || forkDone || seat != forkSeat || !hook.equals(forkHook)) return false;
+        int[] c = COUNTS.get(hook + "#" + seat);
+        return (c == null ? 0 : c[0]) == forkIndex;
+    }
+
     /** Called after the forced decision is logged: reseeds the game's random source with the branch seed (0 = keep). */
     static void forkReseed() {
         if (forkSeed == 0) return;
+        if (SNAPSHOT_DEPTH.get()[0] > 0) { SNAPSHOT_DEPTH.get()[1] = 1; return; }   // inside a saved state: reseed after its restore
         forge.util.MyRandom.setRandom(new java.util.Random(forkSeed));
         System.out.println("SIMNOTE fork reseed " + forkSeed);
     }
@@ -289,10 +297,6 @@ public final class LearnedHooks {
      * @param stock the opponent the stock rule picked
      */
     public static Player attackTarget(Player ai, List<Player> opponents, Map<Player, Integer> threat, Player stock) {
-        return transparently(ai, ATTACK_TARGET, () -> attackTarget0(ai, opponents, threat, stock));
-    }
-
-    private static Player attackTarget0(Player ai, List<Player> opponents, Map<Player, Integer> threat, Player stock) {
         boolean declaring = DECLARING.get() == ai;
         boolean on = hookOn(ai, AiProps.LEARNED_ATTACK_TARGET);   // loads profile models if not yet loaded
         Scorer scorer = scorerFor(seatNumber(ai), ATTACK_TARGET);   // D36: per seat
@@ -304,16 +308,22 @@ public final class LearnedHooks {
         if (!LearnLog.enabled() && !learned && !explore && forced < 0) return null;
 
         List<Player> seats = Features.seatsFrom(ai);
-        float[] x = Features.state(ai);
-        float[][] xa = new float[opponents.size()][];
         int[] cands = new int[opponents.size()];
         int stockIdx = -1;
         for (int i = 0; i < opponents.size(); i++) {
             Player o = opponents.get(i);
             cands[i] = seats.indexOf(o);
             if (o == stock) stockIdx = i;
-            xa[i] = Features.attackCandidate(ai, o, seats, threat.getOrDefault(o, 0), o == stock);
         }
+        // observation only unless a model acts on them: the features are taken from a saved state that is put back
+        final Object[] feats = observing(ai.getGame(), !learned, () -> {
+            float[][] fa = new float[opponents.size()][];
+            for (int i = 0; i < opponents.size(); i++)
+                fa[i] = Features.attackCandidate(ai, opponents.get(i), seats, threat.getOrDefault(opponents.get(i), 0), opponents.get(i) == stock);
+            return new Object[] {Features.state(ai), fa};
+        });
+        float[] x = (float[]) feats[0];
+        float[][] xa = (float[][]) feats[1];
         int chosen = stockIdx;
         if (learned) {
             float[] s = scorer.score(x, xa);
@@ -341,32 +351,58 @@ public final class LearnedHooks {
     }
 
     /**
-     * Stock-with-logging seat ({@code -model none}): its spell_choice record must not change its play. Collecting the
-     * extra approved plays runs AI checks that draw randomness and bump id counters, so stock play with logging would
-     * drift from stock play without it. Such a seat logs from a saved state ({@link #logSpellChoiceTransparently})
-     * and then plays the plain stock pick. Not with forks or exploration (those need the collected list to play).
+     * Whether the seat's spell_choice play is stock, so the candidate list is observation only: no model acts for the
+     * seat (stock profiles, {@code -model none}, Learned seats without a spell_choice model) and no exploration. Such a
+     * seat's collection and record are taken from a saved state ({@link #observedSpellChoice}) and it then plays the
+     * plain stock pick, so logging, fork counting and fork runs leave its play exactly as without them.
      */
-    public static boolean transparentSpellChoice(Player ai) {
-        return LearnLog.enabled() && !forkConfigured && exploreRate(SPELL_CHOICE) <= 0 && lookup(seatNumber(ai), SPELL_CHOICE) == NONE;
-    }
-
-    /** Collects and logs the candidates, then puts randomness, id counters, timestamp/card ids, AI memories and AiCache back. */
-    public static void logSpellChoiceTransparently(Player ai, java.util.function.Supplier<List<forge.game.spellability.SpellAbility>> collect) {
-        transparently(ai, SPELL_CHOICE, () -> spellChoice(ai, collect.get()));
+    public static boolean observesSpellChoice(Player ai) {
+        if (exploreRate(SPELL_CHOICE) > 0) return false;
+        return !(hookOn(ai, AiProps.LEARNED_SPELL_CHOICE) && scorerFor(seatNumber(ai), SPELL_CHOICE) != null);
     }
 
     /**
-     * Runs {@code work} (feature extraction / a record) for seat {@code ai}; when the seat is stock-with-logging for
-     * {@code hook} (-model none, learn log on, no fork or exploration) the draw state is put back afterwards, so the
-     * record leaves the seat's play exactly stock. Otherwise runs it as is.
+     * Spell choice of a seat that plays stock ({@link #observesSpellChoice}): collects the approved plays into a copy
+     * of {@code saList} from a saved state, logs/counts them, puts the state back and returns the stock pick. At the
+     * armed fork point the forced decision acts: the collection is redone on the live state (exactly the acting path
+     * of older jars) and the forced candidate is played, then the branch reseed applies.
      */
+    public static forge.game.spellability.SpellAbility observedSpellChoice(Player ai, List<forge.game.spellability.SpellAbility> saList,
+            java.util.function.Function<List<forge.game.spellability.SpellAbility>, List<forge.game.spellability.SpellAbility>> collect,
+            java.util.function.Supplier<forge.game.spellability.SpellAbility> stock) {
+        if (forkPointNext(SPELL_CHOICE, seatNumber(ai))) {
+            boolean any = observing(ai.getGame(), true, () -> !collect.apply(new ArrayList<>(saList)).isEmpty());
+            if (!any) return stock.get();   // no record here: the fork point is a later decision
+            return spellChoice(ai, collect.apply(saList));
+        }
+        observing(ai.getGame(), true, () -> spellChoice(ai, collect.apply(new ArrayList<>(saList))));   // the collection sorts its list in place
+        return stock.get();
+    }
+
+    /** Runs a learn-log record ({@code work}) from a saved state that is put back afterwards: logging never changes play. */
     public static <T> T transparently(Player ai, String hook, java.util.function.Supplier<T> work) {
-        if (!(LearnLog.enabled() && !forkConfigured && exploreRate(hook) <= 0 && lookup(seatNumber(ai), hook) == NONE)) return work.get();
-        final Object[] snap = saveDrawState(ai.getGame());
+        return observing(ai.getGame(), LearnLog.enabled(), work);
+    }
+
+    /** per thread: [depth of nested saved states, fork reseed pending (1)] */
+    private static final ThreadLocal<int[]> SNAPSHOT_DEPTH = ThreadLocal.withInitial(() -> new int[2]);
+
+    /**
+     * Runs {@code work}; when {@code observe}, the draw state (randomness, id counters, timestamp/card ids, AI card
+     * memories, AiCache, AiController fields) is saved before and put back after, so the work leaves play unchanged.
+     * Nested calls share the outermost saved state. A fork reseed requested inside is applied after the restore.
+     */
+    static <T> T observing(forge.game.Game game, boolean observe, java.util.function.Supplier<T> work) {
+        final int[] st = SNAPSHOT_DEPTH.get();
+        if (!observe || st[0] > 0) return work.get();
+        final Object[] snap = saveDrawState(game);
+        st[0]++;
         try {
             return work.get();
         } finally {
-            restoreDrawState(ai.getGame(), snap);
+            st[0]--;
+            restoreDrawState(game, snap);
+            if (st[1] != 0) { st[1] = 0; forkReseed(); }
         }
     }
 
@@ -391,7 +427,7 @@ public final class LearnedHooks {
             try (java.io.ObjectOutputStream oo = new java.io.ObjectOutputStream(bo)) { oo.writeObject(forge.util.MyRandom.getRandom()); }
             rng = bo.toByteArray();
         } catch (Exception e) {
-            System.err.println("learned-ai: cannot snapshot the random source (" + e + "); stock-with-logging may drift");
+            System.err.println("learned-ai: cannot snapshot the random source (" + e + "); logged play may drift");
         }
         int[] counters = new int[STATIC_COUNTERS.length];
         int cardId = 0, hiddenId = 0;
@@ -534,13 +570,21 @@ public final class LearnedHooks {
         if (!LearnLog.enabled() && !learned && !explore && forced < 0) return approved.get(0);
 
         List<Player> seats = Features.seatsFrom(ai);
-        float[] x = Features.state(ai);
         int n = approved.size() + 1;
-        float[][] xa = new float[n][];
         int[] cands = new int[n];
-        int manaAvail = forge.ai.ComputerUtilMana.getAvailableManaEstimate(ai, false);
-        for (int i = 0; i < approved.size(); i++) { xa[i] = Features.spellCandidate(ai, approved.get(i), i, i == 0, seats, manaAvail); cands[i] = i; }
-        xa[n - 1] = Features.passCandidate(n - 1, manaAvail); cands[n - 1] = -1;   // -1 marks "pass"
+        for (int i = 0; i < approved.size(); i++) cands[i] = i;
+        cands[n - 1] = -1;   // -1 marks "pass"
+        // observation only unless a model acts on them: the features are taken from a saved state that is put back
+        final Object[] feats = observing(ai.getGame(), !learned, () -> {
+            float[] fx = Features.state(ai);
+            float[][] fa = new float[n][];
+            int manaAvail = forge.ai.ComputerUtilMana.getAvailableManaEstimate(ai, false);
+            for (int i = 0; i < approved.size(); i++) fa[i] = Features.spellCandidate(ai, approved.get(i), i, i == 0, seats, manaAvail);
+            fa[n - 1] = Features.passCandidate(n - 1, manaAvail);
+            return new Object[] {fx, fa};
+        });
+        float[] x = (float[]) feats[0];
+        float[][] xa = (float[][]) feats[1];
         int chosen = 0;
         if (learned) {
             float[] s = scorer.score(x, xa);
