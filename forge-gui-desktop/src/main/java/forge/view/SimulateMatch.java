@@ -241,6 +241,14 @@ public class SimulateMatch {
         if (params.containsKey("fork")) {
             forge.ai.learned.LearnedHooks.configureFork(params.get("fork"));
         }
+        // learned-ai D22 phase 2: -combat <stock|solver> overrides LEARNED_COMBAT of every Learned seat (= -Dlearned.combat);
+        // -impact <card_impact.json|csv> gives the solver its value bonus and protected pieces (= -Dlearned.impact)
+        if (params.containsKey("combat")) {
+            forge.ai.learned.LearnedCombat.setOverride(params.get("combat").get(0));
+        }
+        if (params.containsKey("impact")) {
+            forge.ai.learned.LearnedCombat.setImpactPath(params.get("impact").get(0));
+        }
         if (params.containsKey("spellcands")) {
             forge.ai.learned.LearnedHooks.spellCandidates = Integer.parseInt(params.get("spellcands").get(0));
         }
@@ -348,7 +356,9 @@ public class SimulateMatch {
         System.out.println("\tstop - Path of a stop file; the run exits before the next game once it exists.");
         System.out.println("\tx - Exit the process (code 3) after a wall-clock timeout; the cancelled game thread cannot be stopped.");
         System.out.println("\tat - Per-decision AI time budget in seconds (default 5).");
-        System.out.println("\tfork - seat=<n> hook=<spell_choice|attack_target> index=<k> choose=<pos> seed=<s>: force candidate <pos> at the k-th (0-based) logged decision of that seat and hook, then reseed (0 = keep). One -fork flag with all tokens; game 1 only (use -n 1 -s <gameSeed> for a later game).");
+        System.out.println("\tfork - seat=<n> hook=<spell_choice|attack_target> index=<k> choose=<pos> seed=<s>: force candidate <pos> at the k-th (0-based) logged decision of that seat and hook, then reseed (0 = keep). One -fork flag with all tokens; game 1 only (use -n 1 -s <gameSeed> for a later game). hook=attack_assign: the k-th combat_attack record of a solver seat; pos 0..N-1 = the solver's top-N lines, N = the stock line.");
+        System.out.println("\tcombat - stock|solver: attack declaration of every Learned seat (overrides LEARNED_COMBAT; same as -Dlearned.combat)");
+        System.out.println("\timpact - card-impact table (eval/card_impact.py JSON, or CSV name,threat_shrunk) for the combat solver's values and protected pieces");
         System.out.println("\tr - Turn cap in table rounds (rounds * players engine turns); games reaching it are recorded as draws. One SIMRESULT json line is printed per game.");
     }
 

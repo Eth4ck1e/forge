@@ -96,7 +96,7 @@ public class PerSeatModelTest extends AITest {
         File f = new File(dir, "decisions-s4242.jsonl.gz");
         try (BufferedReader r = new BufferedReader(new InputStreamReader(new GZIPInputStream(new FileInputStream(f)), StandardCharsets.UTF_8))) {
             Map<?, ?> head = new Gson().fromJson(r.readLine(), Map.class);
-            AssertJUnit.assertEquals(3.0, ((Number) head.get("schema")).doubleValue());
+            AssertJUnit.assertEquals((double) Features.SCHEMA, ((Number) head.get("schema")).doubleValue());   // 4 since D22 phase 2
             String line;
             while ((line = r.readLine()) != null) {
                 @SuppressWarnings("unchecked")

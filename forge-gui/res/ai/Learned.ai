@@ -355,3 +355,5 @@ LEARNED_HOOKS=true
 LEARNED_ATTACK_TARGET=true
 LEARNED_MODEL=spell_choice=learned/spell_choice.onnx
 LEARNED_SPELL_CHOICE=true
+# learned-ai D22 phase 2: stock = Forge attack declaration; solver = forge.ai.learned.CombatSolver (D22 v1 rules); -combat / -Dlearned.combat override
+LEARNED_COMBAT=stock

@@ -23,6 +23,8 @@ import forge.game.player.Player;
 public final class LearnedHooks {
     public static final String ATTACK_TARGET = "attack_target";
     public static final String SPELL_CHOICE = "spell_choice";
+    /** D22 phase 2: the combat solver's attack declaration (combat_attack records; fork candidates = top-N lines + stock) */
+    public static final String ATTACK_ASSIGN = "attack_assign";
     /** How many heuristic-approved plays the spell-choice hook collects per priority (plus "pass"). */
     public static int spellCandidates = 4;
 
@@ -75,7 +77,7 @@ public final class LearnedHooks {
     private static String forkHook;
     private static long forkSeed;
 
-    /** Parses the {@code -fork} tokens: seat=<1-based> hook=<spell_choice|attack_target> index=<k> choose=<pos> seed=<s>. */
+    /** Parses the {@code -fork} tokens: seat=<1-based> hook=<spell_choice|attack_target|attack_assign> index=<k> choose=<pos> seed=<s>. */
     public static synchronized void configureFork(List<String> tokens) {
         Integer seat = null, index = null, choose = null; String hook = null; long seed = 0;
         for (String t : tokens) {
@@ -93,15 +95,15 @@ public final class LearnedHooks {
         }
         if (seat == null || hook == null || index == null || choose == null)
             throw new IllegalArgumentException("fork: seat, hook, index and choose are required");
-        if (!SPELL_CHOICE.equals(hook) && !ATTACK_TARGET.equals(hook))
-            throw new IllegalArgumentException("fork: hook must be spell_choice or attack_target, got " + hook);
+        if (!SPELL_CHOICE.equals(hook) && !ATTACK_TARGET.equals(hook) && !ATTACK_ASSIGN.equals(hook))
+            throw new IllegalArgumentException("fork: hook must be spell_choice, attack_target or attack_assign, got " + hook);
         forkSeat = seat; forkHook = hook; forkIndex = index; forkChoose = choose; forkSeed = seed;
         forkDone = false; forkConfigured = true;
         System.out.println("SIMNOTE fork armed seat=" + seat + " hook=" + hook + " index=" + index + " choose=" + choose + " seed=" + seed);
     }
 
     /** Counts this decision and returns the forced candidate position if it is the fork point, else -1. */
-    private static synchronized int countDecision(String hook, int seat, int nCands, int turn) {
+    static synchronized int countDecision(String hook, int seat, int nCands, int turn) {
         int[] c = COUNTS.computeIfAbsent(hook + "#" + seat, k -> new int[1]);
         int idx = c[0]++;
         if (!forkConfigured || forkDone || seat != forkSeat || idx != forkIndex || !hook.equals(forkHook)) return -1;
@@ -115,7 +117,7 @@ public final class LearnedHooks {
     }
 
     /** Called after the forced decision is logged: reseeds the game's random source with the branch seed (0 = keep). */
-    private static void forkReseed() {
+    static void forkReseed() {
         if (forkSeed == 0) return;
         forge.util.MyRandom.setRandom(new java.util.Random(forkSeed));
         System.out.println("SIMNOTE fork reseed " + forkSeed);
@@ -202,6 +204,7 @@ public final class LearnedHooks {
             return;
         }
         ensureModelsLoaded(aic, seat, true);
+        LearnedCombat.announce(aic, seat);   // D22 phase 2: SIMNOTE combat mode of this Learned seat, per game
     }
 
     /** D36: seats whose profile models were looked up this game (the lookup happens once per seat per game). */

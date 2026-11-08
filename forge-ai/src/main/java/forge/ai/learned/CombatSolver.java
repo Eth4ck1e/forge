@@ -26,7 +26,10 @@ import java.util.Set;
  * then enumeration order. Defenders block with a deterministic model (good blocks, safe blocks, chumps only facing
  * lethal). {@link Config#lethalScope} adds an optional lethal override (not in the Python; OFF reproduces it).
  *
- * <p>Phase 1: offline only, parity-tested against the Python ({@code CombatSolverParityTest}); not wired online.
+ * <p>Phase 1: offline, parity-tested against the Python ({@code CombatSolverParityTest}). Phase 2 (2026-11-08): the
+ * D22 v1 rules of {@code combat_search.py} d9230e6 (elim_no_swing, attack_rule d22_v1 with multi-block eligibility,
+ * value_model d22 with the card-impact bonus), fixed (forced) attackers, top-N candidate lines; played online through
+ * {@link LearnedCombat} / {@link CombatBoard}.
  */
 public final class CombatSolver {
 
@@ -41,6 +44,11 @@ public final class CombatSolver {
      * EXPECTED = sum over opponents of {@link Input#attackProb} x that opponent's full swing against all our home
      * blockers (independent, not depleted). */
     public enum SwingEstimator { SUM_ALL, MAX_SINGLE, EXPECTED }
+    /** NONE = every eligible creature may attack anyone (Python attack_rule 'none'); D22_V1 = per (creature, defender)
+     * eligibility of the D22 addendum (Python attack_rule 'd22_v1', {@link #attackEligible}). */
+    public enum AttackRule { NONE, D22_V1 }
+    /** PT = max(p,0)+max(t,0) (+cmdValue); D22 = keyword proxy + card-impact threat bonus (Python value_model 'd22'). */
+    public enum ValueModel { PT, D22 }
 
     /** Parameters. Field defaults = the D22 preset decided by Mitchell (2026-11-08): SUM_ALL swing-back, hard
      * survival with lifeFloor 0 (stay alive against everyone swinging everything), no penalty, lethal on the last
@@ -67,14 +75,33 @@ public final class CombatSolver {
         public double chumpMargin = 0.0;
         public boolean swingUntappedOnly = false;
         public double cmdValue = 5.0;
+        /** opponents eliminated by our combat do not swing back (Python elim_no_swing, d9230e6 default on) */
+        public boolean elimNoSwing = true;
+        public AttackRule attackRule = AttackRule.D22_V1;
+        public ValueModel valueModel = ValueModel.D22;
+        /** card-impact table for the D22 value model and the protected-piece rule (null: proxy value, commander only) */
+        public CardImpact impact;
+        public double impactScale = 40.0;
+        /** largest multi-block the D22_V1 eligibility check enumerates (all legal blockers together are also tried) */
+        public int maxBlock = 3;
+        /** candidate lines kept in {@link Result#top} (chosen first) */
+        public int topN = 5;
 
         /** D22 preset (same as new Config()) */
         public static Config d22() { return new Config(); }
 
-        /** train/combat_search.py SearchParams() as of the parity fixture (pre strict-kill fix) */
+        /** train/combat_search.py SearchParams() as of the phase-1 parity fixture (pre strict-kill fix, pre d9230e6) */
         public static Config python() {
             Config c = new Config();
             c.lifeFloor = 10.0; c.lethalScope = LethalScope.OFF; c.strictKill = false;
+            c.elimNoSwing = false; c.attackRule = AttackRule.NONE; c.valueModel = ValueModel.PT;
+            return c;
+        }
+
+        /** Python preset('d22_v1') of d9230e6: as d22() but lethal on the last opponent only (lethal_last) */
+        public static Config pythonD22v1() {
+            Config c = new Config();
+            c.lethalScope = LethalScope.LAST;
             return c;
         }
     }
@@ -93,7 +120,9 @@ public final class CombatSolver {
         public boolean tapped, sick, commander, token, canAttack, canBlock;
         public List<String> kw = new ArrayList<>();
         public Integer kf, pro, col;
-        /** high-importance piece (phase 2 eligibility rule input; the phase 1 solver ignores it) */
+        /** card name (card-impact lookup); null = unknown */
+        public String name;
+        /** protected piece set by the caller (on top of the commander / card-impact rule of the D22_V1 attack rule) */
         public boolean protectedPiece;
     }
 
@@ -118,14 +147,31 @@ public final class CombatSolver {
         public Map<Integer, Double> attackProb = new HashMap<>();
         /** optional per-creature eligibility filter (phase 2); null = every untapped canAttack creature is eligible */
         public AttackEligibility eligibility;
+        /** forced attackers (must-attack, goad): creature id -> the target it attacks; never moved or kept home, exempt
+         * from the attack rule. A target that is not a living opponent / its planeswalker leaves the creature free. */
+        public Map<Integer, Target> fixed = new LinkedHashMap<>();
+        /** optional line to score as well (e.g. the stock declaration): attacker id -> target; see {@link Result#compare} */
+        public Map<Integer, Target> compare;
     }
 
     /** One attacker's target: a player seat, or a planeswalker (pwId >= 0) controlled by that seat. */
     public static final class Target {
         public final int seat, pwId;
         Target(int seat, int pwId) { this.seat = seat; this.pwId = pwId; }
+        public static Target player(int seat) { return new Target(seat, -1); }
+        public static Target planeswalker(int seat, int pwId) { return new Target(seat, pwId); }
         public boolean isPlaneswalker() { return pwId >= 0; }
+        @Override public boolean equals(Object o) { return o instanceof Target && ((Target) o).seat == seat && ((Target) o).pwId == pwId; }
+        @Override public int hashCode() { return seat * 31 + pwId; }
         @Override public String toString() { return pwId >= 0 ? "pw:" + pwId : Integer.toString(seat); }
+    }
+
+    /** One candidate line of the top-N list: the assignment, its profile and the lexicographic score tuple
+     * (Python beam_key flattened: feasible, then per threat rank (kill, quantised eff), -load, -ownLost, oppKilled, -nAtt). */
+    public static final class Line {
+        public final Map<Integer, Target> attacks = new LinkedHashMap<>();
+        public Profile profile;
+        public double[] key;
     }
 
     public static final class Profile {
@@ -152,6 +198,19 @@ public final class CombatSolver {
         /** opponents' seats by threat rank (#1 first) and their threat values */
         public final List<Integer> threatRank = new ArrayList<>();
         public final List<Double> threatValue = new ArrayList<>();
+        /** top-N candidate lines, the chosen line first, then the others by the beam key (descending) */
+        public final List<Line> top = new ArrayList<>();
+        /** per eligible creature: value, protected flag and, per target, the D22_V1 verdict ("ok:survives", "no:trade", ...) */
+        public final Map<Integer, String[]> elig = new LinkedHashMap<>();
+        public final Map<Integer, Double> value = new LinkedHashMap<>();
+        public final Set<Integer> protectedIds = new HashSet<>();
+        /** targets in solver order (players of living opponents, then their planeswalkers) */
+        public final List<Target> targets = new ArrayList<>();
+        /** fixed attackers whose target was honoured */
+        public final Set<Integer> fixedIds = new HashSet<>();
+        /** {@link Input#compare} scored by the same objective (null when absent or not representable: an attacker the
+         * solver does not know as eligible, or a target it does not know) */
+        public Line compare;
 
         public Map<Integer, String> describe() {
             Map<Integer, String> m = new LinkedHashMap<>();
@@ -175,7 +234,8 @@ public final class CombatSolver {
     static final class Unit {
         int id, seat, p, t, dmg, pro;
         Integer col;
-        boolean cmd, tapped, sick, canAttack, canBlock;
+        String name;
+        boolean cmd, tapped, sick, canAttack, canBlock, prot;
         boolean fs, ds, dt, tr, ll, ind, inf, wit, fly, reach, menace, vig, defender, shadow, horse, skulk, fear, intim, unblk;
         double value;
         String sig;   // null for commanders (never grouped)
@@ -218,7 +278,7 @@ public final class CombatSolver {
     static Unit makeUnit(Creature c, int seat, double cmdValue) {
         Unit u = new Unit();
         Set<String> kb = kwb(c);
-        u.id = c.id; u.seat = seat; u.p = c.p; u.t = c.t; u.dmg = c.dmg;
+        u.id = c.id; u.seat = seat; u.p = c.p; u.t = c.t; u.dmg = c.dmg; u.name = c.name;
         u.cmd = c.commander; u.tapped = c.tapped; u.sick = c.sick; u.canAttack = c.canAttack; u.canBlock = c.canBlock;
         if (c.kf != null) {
             int f = c.kf;
@@ -283,6 +343,86 @@ public final class CombatSolver {
             ba = ba && (b.ind || !(bm >= b.hp() || bdt));
         }
         return new boolean[]{!aa, !ba};
+    }
+
+    // ------------------------------------------------------------------------------------------------ D22 v1 rules
+    /** Python d22_value: p+t + keyword proxy (+cmdValue) + impactScale * (threat_shrunk - creature median), at least 0.5 */
+    static double d22Value(Unit u, CardImpact imp, Config P) {
+        double v = Math.max(u.p, 0) + Math.max(u.t, 0) + (u.cmd ? P.cmdValue : 0);
+        v += b(u.fly) + b(u.fs) + b(u.tr) + b(u.ll) + b(u.vig) + b(u.menace) + b(u.reach) + b(u.unblk) + 2 * (b(u.dt) + b(u.ind))
+                + (u.ds ? Math.max(u.p, 0) : 0);
+        Double th = imp == null || u.name == null ? null : imp.threat(u.name);
+        if (th != null) v += P.impactScale * (th - imp.median());
+        return Math.max(0.5, v);
+    }
+
+    private static int b(boolean x) { return x ? 1 : 0; }
+
+    /** Python multi_block: attacker a blocked by bl -> {a dies, blockers that die} (one blocker = exact duel). */
+    static Object[] multiBlock(Unit a, List<Unit> bl) {
+        if (bl.size() == 1) {
+            boolean[] d = duel(a, bl.get(0));
+            return new Object[]{d[0], d[1] ? List.of(bl.get(0)) : List.<Unit>of()};
+        }
+        int dmg = Math.max(a.p, 0) * (a.ds ? 2 : 1);
+        List<Unit> dead = new ArrayList<>();
+        List<Unit> order = new ArrayList<>(bl);
+        order.sort((x, y) -> { int c = Double.compare(y.value, x.value); return c != 0 ? c : Integer.compare(x.id, y.id); });
+        for (Unit b : order) {
+            if (protectedFrom(b, a) || b.ind || dmg <= 0) continue;
+            int need = a.dt ? 1 : Math.max(b.hp(), 0);
+            if (need <= dmg) { dead.add(b); dmg -= need; }
+        }
+        boolean fsOnly = a.fs && !a.ds;
+        int back = 0; boolean dt = false;
+        for (Unit b : bl) {
+            if (fsOnly && dead.contains(b) && !(b.fs || b.ds)) continue;
+            if (protectedFrom(a, b) || b.p <= 0) continue;
+            back += b.p * (b.ds ? 2 : 1); dt |= b.dt;
+        }
+        return new Object[]{!a.ind && (back >= a.hp() || dt), dead};
+    }
+
+    /** Python _blocks_of: blocks of lo..min(kmax, n) legal blockers (lo = 2 for menace), plus all of them if n > kmax */
+    static List<List<Unit>> blocksOf(Unit a, List<Unit> legal, int kmax) {
+        int lo = a.menace ? 2 : 1;
+        List<List<Unit>> out = new ArrayList<>();
+        for (int k = lo; k <= Math.min(kmax, legal.size()); k++) combos(legal, k, 0, new ArrayList<>(), out);
+        if (legal.size() > kmax && legal.size() >= lo) out.add(new ArrayList<>(legal));
+        return out;
+    }
+
+    private static void combos(List<Unit> src, int k, int from, List<Unit> cur, List<List<Unit>> out) {
+        if (cur.size() == k) { out.add(new ArrayList<>(cur)); return; }
+        for (int i = from; i < src.size(); i++) { cur.add(src.get(i)); combos(src, k, i + 1, cur, out); cur.remove(cur.size() - 1); }
+    }
+
+    /**
+     * Python attack_eligible (attack_rule d22_v1): may {@code a} attack a defender whose available blockers are
+     * {@code blockers}? Returns "ok:&lt;reason&gt;" or "no:&lt;reason&gt;". Protected pieces (commander, top-decile card
+     * impact) only if no block (1..maxBlock blockers, or all legal blockers together) kills them; others if no single
+     * legal blocker kills them, or the defender's best block costs them at least as much value as it costs us.
+     */
+    static String attackEligible(Unit a, List<Unit> blockers, Config P) {
+        List<Unit> legal = new ArrayList<>();
+        for (Unit x : blockers) if (canBlock(x, a)) legal.add(x);
+        if (legal.isEmpty()) return "ok:unblockable";
+        List<List<Unit>> blocks = blocksOf(a, legal, P.maxBlock);
+        List<Object[]> res = new ArrayList<>(blocks.size());
+        boolean anyKills = false;
+        for (List<Unit> bl : blocks) { Object[] r = multiBlock(a, bl); res.add(r); anyKills |= (Boolean) r[0]; }
+        if (a.prot) return anyKills ? "no:protected" : "ok:protected";
+        boolean singleKills = false;
+        for (Unit x : legal) singleKills |= duel(a, x)[0];
+        if (!singleKills && (!a.menace || !anyKills)) return "ok:survives";
+        double bo = 0, bt = 0;
+        for (Object[] r : res) {
+            double ours = (Boolean) r[0] ? a.value : 0, theirs = 0;
+            @SuppressWarnings("unchecked") List<Unit> dead = (List<Unit>) r[1];
+            for (Unit d : dead) theirs += d.value;
+            if (ours - theirs > bo - bt + 1e-9) { bo = ours; bt = theirs; }
+        }
+        return bt >= bo - 1e-9 ? "ok:trade" : "no:trade";
     }
 
     private static final Comparator<Unit> BY_VALUE_ID = (x, y) -> {
@@ -435,6 +575,11 @@ public final class CombatSolver {
         final List<Integer> rank = new ArrayList<>();
         final List<Double> threatVal = new ArrayList<>();
         final double[] life, poison, cmdPrior;
+        /** per group: its fixed target index (forced attacker), or -1 */
+        int[] fixedT;
+        /** per group and target: D22_V1 verdict (null when the rule is off or the group is fixed) */
+        String[][] verdict;
+        final Set<Integer> fixedIds = new HashSet<>();
 
         Ctx(Input in, Config P) {
             this.P = P; this.in = in;
@@ -444,7 +589,15 @@ public final class CombatSolver {
             int smax = 1;
             for (Seat s : in.seats) {
                 smax = Math.max(smax, s.seat); seatOf.put(s.seat, s);
-                for (Creature c : s.creatures) units.put(c.id, makeUnit(c, s.seat, P.cmdValue));
+                for (Creature c : s.creatures) {
+                    Unit u = makeUnit(c, s.seat, P.cmdValue);
+                    if (P.valueModel == ValueModel.D22) {
+                        u.value = d22Value(u, P.impact, P);
+                        u.prot = u.cmd || (P.impact != null && u.name != null && P.impact.isTop(u.name));
+                    }
+                    u.prot |= c.protectedPiece;
+                    units.put(c.id, u);
+                }
             }
             S = smax; mySlot = me.seat - 1;
             life = new double[S]; poison = new double[S]; cmdPrior = new double[S];
@@ -455,17 +608,26 @@ public final class CombatSolver {
             T = targets.size();
             List<Unit> mine = new ArrayList<>();
             Set<Integer> vetoed = new HashSet<>();
+            Map<Integer, Integer> fixedTi = new HashMap<>();
+            for (Map.Entry<Integer, Target> e : in.fixed.entrySet()) {
+                int ti = targets.indexOf(e.getValue());
+                if (ti >= 0) { fixedTi.put(e.getKey(), ti); fixedIds.add(e.getKey()); }
+            }
             for (Creature c : me.creatures) {
                 mine.add(units.get(c.id));
-                if (in.eligibility != null && !in.forcedEligible.contains(c.id) && !in.eligibility.mayAttack(c, in)) vetoed.add(c.id);
+                if (in.eligibility != null && !in.forcedEligible.contains(c.id) && !fixedIds.contains(c.id) && !in.eligibility.mayAttack(c, in)) vetoed.add(c.id);
             }
-            for (Unit u : mine) if ((u.canAttack || in.forcedEligible.contains(u.id)) && !u.tapped && !vetoed.contains(u.id)) eligible.add(u);
-            for (Unit u : mine) if (u.tapped && in.forcedEligible.contains(u.id)) eligible.add(u);
+            for (Unit u : mine) if ((u.canAttack || in.forcedEligible.contains(u.id) || fixedIds.contains(u.id)) && !u.tapped && !vetoed.contains(u.id)) eligible.add(u);
+            for (Unit u : mine) if (u.tapped && (in.forcedEligible.contains(u.id) || fixedIds.contains(u.id))) eligible.add(u);
             Set<Integer> elig = new HashSet<>();
             for (Unit u : eligible) elig.add(u.id);
             for (Unit u : mine) if (!elig.contains(u.id) && !u.tapped && u.canBlock) baseBlockers.add(u);
             Map<String, List<Unit>> g = new LinkedHashMap<>();
-            for (Unit u : eligible) g.computeIfAbsent(u.sig != null ? "s" + u.sig : "c" + u.id, k -> new ArrayList<>()).add(u);
+            for (Unit u : eligible) {
+                String key = fixedIds.contains(u.id) ? "f" + u.id : u.sig == null ? "c" + u.id
+                        : P.valueModel == ValueModel.PT ? "s" + u.sig : "s" + u.sig + "|" + u.value + "|" + u.prot;
+                g.computeIfAbsent(key, k -> new ArrayList<>()).add(u);
+            }
             groups.addAll(g.values());
             groups.sort((x, y) -> {
                 Unit a = x.get(0), b = y.get(0);
@@ -475,9 +637,14 @@ public final class CombatSolver {
                 return c != 0 ? c : Integer.compare(a.id, b.id);
             });
             groupBlocks = new boolean[groups.size()];
+            fixedT = new int[groups.size()];
             for (int i = 0; i < groups.size(); i++) {
-                options.add(groupOptions(groups.get(i).size()));
-                groupBlocks[i] = groups.get(i).get(0).canBlock && !groups.get(i).get(0).tapped;
+                Unit u0 = groups.get(i).get(0);
+                Integer ft = fixedTi.get(u0.id);
+                fixedT[i] = ft == null ? -1 : ft;
+                if (ft != null) { int[] v = new int[T]; v[ft] = 1; List<int[]> one = new ArrayList<>(); one.add(v); options.add(one); }
+                else options.add(groupOptions(groups.get(i).size()));
+                groupBlocks[i] = u0.canBlock && !u0.tapped;
             }
             for (Seat s : opps) {
                 List<Unit> blk = new ArrayList<>(), att = new ArrayList<>();
@@ -491,7 +658,33 @@ public final class CombatSolver {
                 }
                 oppBlk.put(s.seat, blk); oppAtt.put(s.seat, att);
             }
+            verdict = new String[groups.size()][];
+            if (P.attackRule == AttackRule.D22_V1) {
+                // per group and target: may this creature attack that defender (player or its planeswalker)?
+                for (int gi = 0; gi < groups.size(); gi++) {
+                    if (fixedT[gi] >= 0) continue;
+                    Unit u0 = groups.get(gi).get(0);
+                    String[] vs = new String[T];
+                    boolean[] ok = new boolean[T];
+                    for (int t = 0; t < T; t++) { vs[t] = attackEligible(u0, oppBlk.get(targets.get(t).seat), P); ok[t] = vs[t].startsWith("ok"); }
+                    verdict[gi] = vs;
+                    List<int[]> keep = new ArrayList<>();
+                    for (int[] v : options.get(gi)) {
+                        boolean good = true;
+                        for (int t = 0; t < T; t++) if (v[t] != 0 && !ok[t]) { good = false; break; }
+                        if (good) keep.add(v);
+                    }
+                    options.set(gi, keep);
+                }
+            }
             threats();
+        }
+
+        /** the "nothing chosen" vector of group gi: all home, or its fixed target */
+        int[] homeVec(int gi) {
+            int[] v = new int[T];
+            if (fixedT[gi] >= 0) v[fixedT[gi]] = 1;
+            return v;
         }
 
         private List<int[]> groupOptions(int m) {
@@ -538,7 +731,7 @@ public final class CombatSolver {
             for (double[] t : out) { rank.add((int) t[3]); threatVal.add(t[0]); }
         }
 
-        int[][] allHome() { return new int[groups.size()][T]; }
+        int[][] allHome() { int[][] a = new int[groups.size()][]; for (int i = 0; i < a.length; i++) a[i] = homeVec(i); return a; }
     }
 
     static int sum(int[] v) { int s = 0; for (int x : v) s += x; return s; }
@@ -702,6 +895,11 @@ public final class CombatSolver {
             List<Unit> avail = home; double swPs = 0, rnd = 0, mx = 0; boolean any = false;
             for (Seat s : ctx.opps) {
                 Sub sub = subs.get(s.seat);
+                if (P.elimNoSwing && sub.elim) {   // d9230e6: an eliminated opponent does not swing back
+                    pr.swing.put(s.seat, 0.0);
+                    mx = any ? Math.max(mx, 0) : 0; any = true;
+                    continue;
+                }
                 StringBuilder kb = new StringBuilder().append(s.seat).append('|');
                 for (Unit u : avail) kb.append(u.id).append(',');
                 kb.append('|').append(sub.deadBlkKey);
@@ -722,6 +920,7 @@ public final class CombatSolver {
                 double best = 0, exp = 0, ps = 0, psMax = 0;
                 for (Seat s : ctx.opps) {
                     Sub sub = subs.get(s.seat);
+                    if (P.elimNoSwing && sub.elim) continue;   // solo swing 0
                     List<Unit> att = ctx.oppAtt.get(s.seat);
                     if (!sub.deadBlk.isEmpty()) { List<Unit> a2 = new ArrayList<>(); for (Unit u : att) if (!sub.deadBlk.contains(u.id)) a2.add(u); att = a2; }
                     Swing r = swingBack(att, home);
@@ -838,9 +1037,9 @@ public final class CombatSolver {
         return b.get(0);
     }
 
-    private static int[][] homeRest(int[][] partial, int G, int T) {
+    private static int[][] homeRest(Ctx ctx, int[][] partial, int G) {
         int[][] out = new int[G][];
-        for (int i = 0; i < G; i++) out[i] = i < partial.length ? partial[i] : new int[T];
+        for (int i = 0; i < G; i++) out[i] = i < partial.length ? partial[i] : ctx.homeVec(i);
         return out;
     }
 
@@ -880,7 +1079,7 @@ public final class CombatSolver {
                 for (int[][] st : states)
                     for (int[] o : ctx.options.get(gi)) { int[][] e = Arrays.copyOf(st, st.length + 1); e[st.length] = o; ext.add(e); }
                 List<int[][]> full = new ArrayList<>();
-                for (int[][] e : ext) full.add(homeRest(e, G, ctx.T));
+                for (int[][] e : ext) full.add(homeRest(ctx, e, G));
                 List<Profile> pr = evaluate(ctx, full);
                 List<Integer> order = new ArrayList<>();
                 for (int i = 0; i < ext.size(); i++) order.add(i);
@@ -907,12 +1106,69 @@ public final class CombatSolver {
         res.chosen = chosen; res.mode = mode; res.fallback = sel[1] == 1; res.nEval = profs.size();
         for (Profile p : profs) if (p.feasible) res.nFeasible++;
         res.threatRank.addAll(ctx.rank); res.threatValue.addAll(ctx.threatVal);
-        for (int gi = 0; gi < G; gi++) {
+        concrete(ctx, chosen.asg, res.attacks);
+        // phase 2: top-N lines (chosen first, then by the beam key, distinct assignments) and per-creature verdicts
+        List<Integer> order = new ArrayList<>();
+        for (int i = 0; i < profs.size(); i++) order.add(i);
+        final Config PK = P;
+        final List<Profile> PR = profs;
+        order.sort((x, y) -> compareBeamKey(PR.get(y), PR.get(x), PK));
+        order.remove(Integer.valueOf(ci));
+        order.add(0, ci);
+        for (int i : order) {
+            if (res.top.size() >= Math.max(1, P.topN)) break;
+            Profile p = profs.get(i);
+            boolean dup = false;
+            for (Line l : res.top) if (sameAsg(l.profile.asg, p.asg)) { dup = true; break; }
+            if (dup) continue;
+            Line l = new Line(); l.profile = p; l.key = beamKey(p, P);
+            concrete(ctx, p.asg, l.attacks);
+            res.top.add(l);
+        }
+        res.targets.addAll(ctx.targets);
+        res.fixedIds.addAll(ctx.fixedIds);
+        if (in.compare != null) {
+            int[][] asg = new int[G][ctx.T];
+            int found = 0;
+            for (int gi = 0; gi < G; gi++)
+                for (Unit u : ctx.groups.get(gi)) {
+                    Target t = in.compare.get(u.id);
+                    if (t == null) continue;
+                    int ti = ctx.targets.indexOf(t);
+                    if (ti >= 0) { asg[gi][ti]++; found++; }
+                }
+            if (found == in.compare.size()) {
+                Line l = new Line(); l.profile = evaluate(ctx, List.<int[][]>of(asg)).get(0); l.key = beamKey(l.profile, P);
+                concrete(ctx, asg, l.attacks);
+                res.compare = l;
+            }
+        }
+        for (int gi = 0; gi < G; gi++)
+            for (Unit u : ctx.groups.get(gi)) if (ctx.verdict[gi] != null) res.elig.put(u.id, ctx.verdict[gi]);
+        for (Unit u : ctx.eligible) { res.value.put(u.id, u.value); if (u.prot) res.protectedIds.add(u.id); }
+        return res;
+    }
+
+    /** group-count assignment -> attacker id -> target (units taken in global target order, as the Python output) */
+    private static void concrete(Ctx ctx, int[][] asg, Map<Integer, Target> out) {
+        for (int gi = 0; gi < ctx.groups.size(); gi++) {
             List<Unit> g = ctx.groups.get(gi); int k = 0;
             for (int t = 0; t < ctx.T; t++)
-                for (int n = 0; n < chosen.asg[gi][t] && k < g.size(); n++, k++) res.attacks.put(g.get(k).id, ctx.targets.get(t));
+                for (int n = 0; n < asg[gi][t] && k < g.size(); n++, k++) out.put(g.get(k).id, ctx.targets.get(t));
         }
-        return res;
+    }
+
+    /** Python beam_key, flattened: feasible, (kill, q(eff)) per rank, -load, -ownLost, oppKilled, -nAtt */
+    static double[] beamKey(Profile p, Config P) {
+        int n = p.eff.length;
+        double[] k = new double[1 + 2 * n + 4];
+        k[0] = p.feasible ? 1 : 0;
+        for (int i = 0; i < n; i++) {
+            k[1 + 2 * i] = P.strictKill && rewarded(i, n, P) && p.elimByRank[i] ? 1 : 0;
+            k[2 + 2 * i] = q(p.eff[i], P);
+        }
+        k[1 + 2 * n] = -p.load; k[2 + 2 * n] = -p.ownLost; k[3 + 2 * n] = p.oppKilled; k[4 + 2 * n] = -p.nAtt;
+        return k;
     }
 
     /** index of the lethal-override line, or -1 (OFF, or no applicable line) */

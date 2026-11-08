@@ -1543,6 +1543,10 @@ public class AiController {
 
             aiAtk.reinforceWithBanding(combat);
             refineAttackWithFlatMonteCarlo(attacker, combat);
+            // learned-ai D22 phase 2: a Learned seat with LEARNED_COMBAT=solver replaces the stock declaration (no-op otherwise)
+            if (attacker == player) {
+                forge.ai.learned.LearnedCombat.declare(this, attacker, combat);
+            }
             // learned-ai D19: exact combat snapshot with the declaration, for the offline combat solver
             if (forge.ai.learned.LearnLog.enabled() && attacker == player) {
                 forge.ai.learned.LearnLog.raw("combat_snapshot", forge.ai.learned.CombatSnapshot.json(attacker, combat, "attackers"));
