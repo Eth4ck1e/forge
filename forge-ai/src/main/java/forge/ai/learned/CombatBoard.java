@@ -93,7 +93,7 @@ public final class CombatBoard {
 
     static CombatSolver.Creature creature(Card c) {
         CombatSolver.Creature cr = new CombatSolver.Creature();
-        cr.id = c.getId(); cr.name = c.getName();
+        cr.id = c.getId(); cr.name = c.isFaceDown() ? null : c.getName();   // learned-ai D39 rec. 2: a face-down card has no name (null = unknown)
         cr.p = c.getNetPower(); cr.t = c.getNetToughness(); cr.dmg = c.getDamage();
         cr.tapped = c.isTapped(); cr.sick = c.isSick(); cr.commander = c.isCommander(); cr.token = c.isToken();
         cr.canBlock = CombatUtil.canBlock(c);

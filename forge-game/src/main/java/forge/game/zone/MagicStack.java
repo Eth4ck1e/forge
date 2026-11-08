@@ -58,6 +58,9 @@ import java.util.stream.Collectors;
  * @version $Id$
  */
 public class MagicStack /* extends MyObservable */ implements Iterable<SpellAbilityStackInstance> {
+    /** learned-ai D33: optional observer of every spell / ability put on the stack after payment (null in stock play). */
+    public static volatile java.util.function.Consumer<SpellAbility> learnedCastObserver;
+
     private static final int MAX_TRIGGER_REPEATS = 50;
     /**
      * How often the same card may fail to be put on the stack (illegal targets after the costs were paid) in one turn
@@ -372,6 +375,7 @@ public class MagicStack /* extends MyObservable */ implements Iterable<SpellAbil
         runParams.put(AbilityKey.CurrentCastSpells, getSpellCardsCastThisTurn());
 
         game.updateStackForView();
+        if (learnedCastObserver != null) learnedCastObserver.accept(sp);   // learned-ai D33: mana_payment records
         game.fireEvent(new GameEventSpellAbilityCast(sp, si, stack.size() - 1));
 
         if (!sp.isCopied()) {

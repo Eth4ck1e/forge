@@ -384,6 +384,7 @@ public class PhaseHandler implements java.io.Serializable, IHasForgeLog {
                     break;
 
                 case CLEANUP:
+                    if (learnedCleanupObserver != null) learnedCleanupObserver.accept(playerTurn);   // learned-ai D33: turn_end records
                     // CR 514.1
                     final int handSize = playerTurn.getZone(ZoneType.Hand).size();
                     final int max = playerTurn.getMaxHandSize();
@@ -467,6 +468,11 @@ public class PhaseHandler implements java.io.Serializable, IHasForgeLog {
         }
     }
 
+    // learned-ai D33: optional observers (null in stock play): the cleanup step began (before the discard), and
+    // floating mana emptied at a step change
+    public static volatile java.util.function.Consumer<Player> learnedCleanupObserver;
+    public static volatile java.util.function.BiConsumer<Player, List<forge.game.mana.Mana>> learnedManaLostObserver;
+
     private void onPhaseEnd() {
         // If the Stack isn't empty why is nextPhase being called?
         if (!game.getStack().isEmpty()) {
@@ -475,7 +481,9 @@ public class PhaseHandler implements java.io.Serializable, IHasForgeLog {
 
         final Map<Player, Integer> lossMap = Maps.newHashMap();
         for (Player p : game.getPlayers()) {
-            int burn = p.getManaPool().clearPool(true).size();
+            final List<forge.game.mana.Mana> lostMana = p.getManaPool().clearPool(true);   // learned-ai D33
+            if (learnedManaLostObserver != null && !lostMana.isEmpty()) learnedManaLostObserver.accept(p, lostMana);   // learned-ai D33
+            int burn = lostMana.size();
 
             if (p.getManaPool().hasBurn()) {
                 final int lost = p.loseLife(burn, false, true, null);

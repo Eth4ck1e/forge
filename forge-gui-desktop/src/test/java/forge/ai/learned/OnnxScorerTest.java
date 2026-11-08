@@ -56,6 +56,50 @@ public class OnnxScorerTest {
         AssertJUnit.assertTrue("latency " + micros + " us exceeds the 200 us budget", micros < 200);
     }
 
+    /**
+     * learned-ai schema 5: spell_choice vectors grew from 70 to 87 columns (appended only). The cycle-3 model scores the
+     * logged schema-4 vectors as Python did, and scores them identically when the 17 new columns are appended (any
+     * values): the scorer feeds the model its exported width. Same for the shipped profile model (res/ai/learned).
+     */
+    @Test
+    public void schema5VectorsScoreLikeSchema4OnCycle3() throws Exception {
+        File model = new File(MODELS + "spell_choice_h1cycle3.onnx");
+        File fixture = new File(MODELS + "spell_choice_h1cycle3.parity.json");
+        File shipped = new File("../forge-gui/res/ai/learned/spell_choice.onnx");
+        if (!model.isFile() || !fixture.isFile()) throw new SkipException("cycle-3 model or fixture not present: " + model.getAbsolutePath());
+        AssertJUnit.assertEquals(70, Features.SPELL_LEGACY);
+        AssertJUnit.assertEquals(Features.SPELL_LEGACY + Features.SPELL_EXTRA.length, Features.SPELL_CANDIDATE.length);
+        Type t = new TypeToken<List<Map<String, Object>>>() {}.getType();
+        List<Map<String, Object>> recs = new Gson().fromJson(new FileReader(fixture), t);
+        java.util.Random rnd = new java.util.Random(5);
+        for (File f : shipped.isFile() ? new File[] {model, shipped} : new File[] {model}) {
+            OnnxScorer scorer = new OnnxScorer(f.getPath());
+            AssertJUnit.assertEquals(f.getName(), Features.SPELL_LEGACY, scorer.candidateWidth());
+            double maxPy = 0, maxWide = 0; int n = 0;
+            for (Map<String, Object> r : recs) {
+                float[] x = floats((List<?>) r.get("x"));
+                List<?> xaL = (List<?>) r.get("xa");
+                float[][] xa = new float[xaL.size()][], wide = new float[xaL.size()][];
+                for (int i = 0; i < xa.length; i++) {
+                    xa[i] = floats((List<?>) xaL.get(i));
+                    AssertJUnit.assertEquals(Features.SPELL_LEGACY, xa[i].length);
+                    float[] e = new float[Features.SPELL_EXTRA.length];
+                    for (int k = 0; k < e.length; k++) e[k] = rnd.nextInt(9) - 2;
+                    wide[i] = Features.concat(xa[i], e);
+                }
+                float[] old = scorer.score(x, xa), got = scorer.score(x, wide);
+                for (int i = 0; i < got.length; i++) {
+                    maxWide = Math.max(maxWide, Math.abs(got[i] - old[i])); n++;
+                    if (f == model) maxPy = Math.max(maxPy, Math.abs(old[i] - ((Number) ((List<?>) r.get("score")).get(i)).floatValue()));
+                }
+            }
+            System.out.println("schema-5 parity " + scorer.id() + ": " + n + " scores, max |87-col - 70-col| = " + maxWide
+                    + (f == model ? ", max |java - python| = " + maxPy : ""));
+            AssertJUnit.assertEquals("appended columns changed a score", 0.0, maxWide);
+            if (f == model) AssertJUnit.assertTrue("java vs python " + maxPy, maxPy < 1e-4);
+        }
+    }
+
     private static float[] floats(List<?> l) {
         float[] f = new float[l.size()];
         for (int i = 0; i < f.length; i++) f[i] = ((Number) l.get(i)).floatValue();

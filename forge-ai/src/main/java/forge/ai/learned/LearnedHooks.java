@@ -613,15 +613,7 @@ public final class LearnedHooks {
         int[] cands = new int[n];
         for (int i = 0; i < approved.size(); i++) cands[i] = i;
         cands[n - 1] = -1;   // -1 marks "pass"
-        // observation only unless a model acts on them: the features are taken from a saved state that is put back
-        final Object[] feats = observing(ai.getGame(), !learned, () -> {
-            float[] fx = Features.state(ai);
-            float[][] fa = new float[n][];
-            int manaAvail = forge.ai.ComputerUtilMana.getAvailableManaEstimate(ai, false);
-            for (int i = 0; i < approved.size(); i++) fa[i] = Features.spellCandidate(ai, approved.get(i), i, i == 0, seats, manaAvail);
-            fa[n - 1] = Features.passCandidate(n - 1, manaAvail);
-            return new Object[] {fx, fa};
-        });
+        final Object[] feats = spellFeatures(ai, approved, seats, !learned, LearnLog.enabled());
         float[] x = (float[]) feats[0];
         float[][] xa = (float[][]) feats[1];
         int chosen = 0;
@@ -639,10 +631,34 @@ public final class LearnedHooks {
             for (int i = 0; i < seats.size(); i++) abs[i] = seatNumber(seats.get(i));
             PhaseType ph = ai.getGame().getPhaseHandler().getPhase();
             LearnLog.decision(SPELL_CHOICE, seatNumber(ai), ai.getGame().getPhaseHandler().getTurn(), ph == null ? 0 : ph.ordinal(),
-                    abs, cands, chosen, 0, forced >= 0 ? "fork" : learned ? "learned" : (explore ? "explore" : "stock"), modelId(learned, scorer), x, xa);
+                    abs, cands, chosen, 0, forced >= 0 ? "fork" : learned ? "learned" : (explore ? "explore" : "stock"), modelId(learned, scorer), x, xa,
+                    (String) feats[2]);
+            ManaView.noteDecision(ai);
         }
         if (forced >= 0) forkReseed();
         return chosen == n - 1 ? null : approved.get(chosen);
+    }
+
+    /**
+     * The spell_choice vectors {x, xa (approved plays then pass), record fields (schema 5; null unless {@code record})}.
+     * The schema-4 part comes from a saved state unless a model acts on it ({@code observeLegacy}); the appended part
+     * and the record fields (engine castability checks) always come from a saved state, so they never change play.
+     */
+    static Object[] spellFeatures(Player ai, List<forge.game.spellability.SpellAbility> approved, List<Player> seats,
+                                  boolean observeLegacy, boolean record) {
+        final int n = approved.size() + 1;
+        final Object[] feats = observing(ai.getGame(), observeLegacy, () -> {
+            float[] fx = Features.state(ai);
+            float[][] fa = new float[n][];
+            int manaAvail = forge.ai.ComputerUtilMana.getAvailableManaEstimate(ai, false);
+            for (int i = 0; i < approved.size(); i++) fa[i] = Features.spellCandidate(ai, approved.get(i), i, i == 0, seats, manaAvail);
+            fa[n - 1] = Features.passCandidate(n - 1, manaAvail);
+            return new Object[] {fx, fa};
+        });
+        final ManaView.Spell extra = observing(ai.getGame(), true, () -> ManaView.spell(ai, approved, record));
+        float[][] xa = (float[][]) feats[1];
+        for (int i = 0; i < n; i++) xa[i] = Features.concat(xa[i], extra.extra[i]);
+        return new Object[] {feats[0], xa, extra.json};
     }
 
     /** 1-based seat number as used in SIMRESULT (registration order). */

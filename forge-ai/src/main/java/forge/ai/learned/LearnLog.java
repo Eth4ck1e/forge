@@ -44,16 +44,24 @@ public final class LearnLog {
         sb.append(",\"names\":"); strings(sb, Features.names());
         sb.append(",\"candNames\":{\"attack_target\":"); strings(sb, java.util.Arrays.asList(Features.CANDIDATE));
         sb.append(",\"spell_choice\":"); strings(sb, java.util.Arrays.asList(Features.SPELL_CANDIDATE));
-        sb.append("},\"hooks\":[\"attack_target\",\"spell_choice\"]}\n");
+        sb.append("},\"hooks\":[\"attack_target\",\"spell_choice\"]");
+        sb.append(",\"spellLegacy\":").append(Features.SPELL_LEGACY);   // schema 5: spell_choice xa columns of schema 2-4
+        sb.append(",\"raw\":[\"combat_snapshot\",\"combat_damage\",\"combat_result\",\"combat_attack\",\"turn_end\",\"mana_payment\",\"mana_lost\"]}\n");
         out.write(sb.toString());
         Runtime.getRuntime().addShutdownHook(new Thread(LearnLog::close));
         forge.game.combat.Combat.learnedDamageObserver = CombatSnapshot::damage;   // D19: "combat_damage" records
         forge.game.combat.Combat.learnedEndObserver = CombatSnapshot::combatEnd;   // D19: "combat_result" records
+        forge.game.phase.PhaseHandler.learnedCleanupObserver = ManaView::onCleanup;   // D33: "turn_end" records
+        forge.game.phase.PhaseHandler.learnedManaLostObserver = ManaView::onManaLost;   // D33: "mana_lost" records
+        forge.game.zone.MagicStack.learnedCastObserver = ManaView::onCast;   // D33: "mana_payment" records
     }
 
     public static void beginGame(int iGame, long gameSeed) {
         CombatSnapshot.resetPending();   // outside the LearnLog lock: CombatSnapshot locks itself, then LearnLog
+        ManaView.resetGame();
         synchronized (LearnLog.class) { game = iGame; gseed = gameSeed; }
+        if (enabled()) System.out.println("SIMNOTE learned schema " + Features.SCHEMA + ": spell_choice manaLeft = capacity (every mana source,"
+                + " tapped or not, as in schema 2-4) - cost; manaUntapped / manaUntappedLeft (appended) count untapped usable sources + floating mana");
     }
 
     /** Flushes after each game so a killed worker loses at most the game in progress. */
@@ -68,6 +76,9 @@ public final class LearnLog {
     public static synchronized void close() {
         forge.game.combat.Combat.learnedDamageObserver = null;
         forge.game.combat.Combat.learnedEndObserver = null;
+        forge.game.phase.PhaseHandler.learnedCleanupObserver = null;
+        forge.game.phase.PhaseHandler.learnedManaLostObserver = null;
+        forge.game.zone.MagicStack.learnedCastObserver = null;
         if (out == null) return;
         try { out.close(); } catch (IOException ignored) {}
         out = null;
@@ -80,8 +91,14 @@ public final class LearnLog {
      * {@code chosen} / {@code stock} are indices into {@code cands}, which are relative seat indices. {@code model}
      * (schema 3, D36) is the id of the model that piloted the seat for this hook, or "stock".
      */
+    public static void decision(String hook, int actingSeat, int turn, int phase, int[] seats, int[] cands,
+                                int chosen, int stock, String pilot, String model, float[] x, float[][] xa) {
+        decision(hook, actingSeat, turn, phase, seats, cands, chosen, stock, pilot, model, x, xa, null);
+    }
+
+    /** As above; {@code extra} (schema 5) is appended to the record: further {@code ,"key":value} pairs, or null. */
     public static synchronized void decision(String hook, int actingSeat, int turn, int phase, int[] seats, int[] cands,
-                                             int chosen, int stock, String pilot, String model, float[] x, float[][] xa) {
+                                             int chosen, int stock, String pilot, String model, float[] x, float[][] xa, String extra) {
         if (out == null) return;
         StringBuilder sb = new StringBuilder(8192);
         sb.append("{\"v\":").append(Features.SCHEMA).append(",\"hook\":\"").append(hook).append('"');
@@ -94,7 +111,9 @@ public final class LearnLog {
         sb.append(",\"x\":"); floats(sb, x);
         sb.append(",\"xa\":[");
         for (int i = 0; i < xa.length; i++) { if (i > 0) sb.append(','); floats(sb, xa[i]); }
-        sb.append("]}\n");
+        sb.append(']');
+        if (extra != null) sb.append(extra);
+        sb.append("}\n");
         try { out.write(sb.toString()); lines++; } catch (IOException e) { System.err.println("learnlog: " + e); }
     }
 

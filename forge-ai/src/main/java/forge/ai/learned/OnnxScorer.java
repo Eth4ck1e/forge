@@ -20,6 +20,8 @@ public final class OnnxScorer implements LearnedHooks.Scorer {
     private final String path;
     private final String id;
     private long calls, nanos;
+    /** input widths the model was exported with (-1 = dynamic): longer vectors are cut to them (schema 5 appends columns) */
+    private final int xWidth, aWidth;
 
     public OnnxScorer(String modelPath) throws OrtException {
         path = modelPath;
@@ -28,20 +30,35 @@ public final class OnnxScorer implements LearnedHooks.Scorer {
         OrtSession.SessionOptions opts = new OrtSession.SessionOptions();
         opts.setIntraOpNumThreads(1);   // sim workers already saturate the cores; the model is tiny
         session = env.createSession(modelPath, opts);
+        xWidth = width(session, "x");
+        aWidth = width(session, "a");
     }
+
+    private static int width(OrtSession s, String input) throws OrtException {
+        ai.onnxruntime.NodeInfo ni = s.getInputInfo().get(input);
+        if (ni == null || !(ni.getInfo() instanceof ai.onnxruntime.TensorInfo)) return -1;
+        long[] shape = ((ai.onnxruntime.TensorInfo) ni.getInfo()).getShape();
+        return shape.length == 2 && shape[1] > 0 ? (int) shape[1] : -1;
+    }
+
+    /** the candidate width the model reads (-1 = dynamic) */
+    public int candidateWidth() { return aWidth; }
 
     @Override
     public synchronized float[] score(float[] x, float[][] xa) {
         int n = xa.length;
-        float[] xs = new float[n * x.length];
-        float[] as = new float[n * xa[0].length];
+        // learned-ai schema 5: a model exported for a narrower vector reads its own leading columns (append-only schema)
+        final int xw = xWidth > 0 && xWidth < x.length ? xWidth : x.length;
+        final int aw = aWidth > 0 && aWidth < xa[0].length ? aWidth : xa[0].length;
+        float[] xs = new float[n * xw];
+        float[] as = new float[n * aw];
         for (int i = 0; i < n; i++) {
-            System.arraycopy(x, 0, xs, i * x.length, x.length);
-            System.arraycopy(xa[i], 0, as, i * xa[0].length, xa[0].length);
+            System.arraycopy(x, 0, xs, i * xw, xw);
+            System.arraycopy(xa[i], 0, as, i * aw, aw);
         }
         long t0 = System.nanoTime();
-        try (OnnxTensor tx = OnnxTensor.createTensor(env, FloatBuffer.wrap(xs), new long[] {n, x.length});
-             OnnxTensor ta = OnnxTensor.createTensor(env, FloatBuffer.wrap(as), new long[] {n, xa[0].length})) {
+        try (OnnxTensor tx = OnnxTensor.createTensor(env, FloatBuffer.wrap(xs), new long[] {n, xw});
+             OnnxTensor ta = OnnxTensor.createTensor(env, FloatBuffer.wrap(as), new long[] {n, aw})) {
             Map<String, OnnxTensor> in = new HashMap<>();
             in.put("x", tx); in.put("a", ta);
             try (OrtSession.Result r = session.run(in)) {

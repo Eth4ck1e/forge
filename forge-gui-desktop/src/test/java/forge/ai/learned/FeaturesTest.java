@@ -51,6 +51,13 @@ public class FeaturesTest extends AITest {
         AssertJUnit.assertEquals(Features.size(), Features.names().size());
         AssertJUnit.assertEquals(570, Features.size());
         AssertJUnit.assertEquals(9, Features.CANDIDATE.length);
+        // schema 5: 17 spell_choice columns appended after the 70 of schema 2-4 (old indices unchanged)
+        AssertJUnit.assertEquals(5, Features.SCHEMA);
+        AssertJUnit.assertEquals(87, Features.SPELL_CANDIDATE.length);
+        AssertJUnit.assertEquals("manaLeft", Features.SPELL_CANDIDATE[31]);
+        AssertJUnit.assertEquals("api.other", Features.SPELL_CANDIDATE[69]);
+        AssertJUnit.assertEquals("manaUntapped", Features.SPELL_CANDIDATE[70]);
+        AssertJUnit.assertEquals("oppCreaturesAffected", Features.SPELL_CANDIDATE[86]);
     }
 
     @Test

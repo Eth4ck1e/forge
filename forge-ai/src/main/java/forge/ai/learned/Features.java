@@ -23,7 +23,10 @@ import forge.game.zone.ZoneType;
  * Card identity enters only through types, keywords and costs in v0; a role map is a later schema version.
  */
 public final class Features {
-    public static final int SCHEMA = 4;   // 3 (D36): decision records carry "model"; 4 (D22 phase 2): combat_attack records
+    // 3 (D36): decision records carry "model"; 4 (D22 phase 2): combat_attack records; 5 (D33): spell_choice candidate
+    // features appended (SPELL_EXTRA, old indices unchanged), spell_choice mana/hand fields, turn_end / mana_payment /
+    // mana_lost records
+    public static final int SCHEMA = 5;
     public static final int SEATS = 4;
     /** Creature slots per seat, best first by power. */
     public static final int CREATURE_SLOTS = 6;
@@ -209,17 +212,58 @@ public final class Features {
             "costMana", "costTap", "costSac", "costLife", "costDiscard", "manaLeft",
             "tgtSeatRel0", "tgtSeatRel1", "tgtSeatRel2", "tgtSeatRel3", "tgtOwnCard", "tgtOppCard", "tgtCardPower",
             "fromHand", "fromBattlefield", "fromGraveyard", "fromCommand"};
+    /**
+     * Schema 5 (D33), appended after "api.other" so schema-4 models read the first {@link #SPELL_LEGACY} columns
+     * unchanged ({@link OnnxScorer} feeds a model only the width it was exported with). manaUntapped counts untapped
+     * usable sources (+ floating) where the old manaLeft counts every source, tapped or not; pips are of the full mana
+     * cost (hybrid split evenly); the sweeper bins are set on top of the old Destroy / DealDamage / Sacrifice bins,
+     * which keep their schema-4 meaning; the creature counts are {@link ManaView#affected} estimates (public board).
+     */
+    public static final String[] SPELL_EXTRA = {"manaUntapped", "manaUntappedLeft", "instantSpeed", "castableNow",
+            "pipsW", "pipsU", "pipsB", "pipsR", "pipsG", "pipsC", "pipsGeneric", "hasX",
+            "api.sweeperDestroy", "api.sweeperDamage", "api.sweeperSacrifice", "ownCreaturesAffected", "oppCreaturesAffected"};
+    /** spell_choice candidate width of schema 2-4 (the shipped models' input) */
+    public static final int SPELL_LEGACY = SPELL_FIXED.length + API_BINS.length + 1;
     public static final String[] SPELL_CANDIDATE;
     static {
-        SPELL_CANDIDATE = new String[SPELL_FIXED.length + API_BINS.length + 1];
+        SPELL_CANDIDATE = new String[SPELL_LEGACY + SPELL_EXTRA.length];
         System.arraycopy(SPELL_FIXED, 0, SPELL_CANDIDATE, 0, SPELL_FIXED.length);
         for (int b = 0; b < API_BINS.length; b++) SPELL_CANDIDATE[SPELL_FIXED.length + b] = "api." + API_BINS[b][0];
-        SPELL_CANDIDATE[SPELL_CANDIDATE.length - 1] = "api.other";
+        SPELL_CANDIDATE[SPELL_LEGACY - 1] = "api.other";
+        System.arraycopy(SPELL_EXTRA, 0, SPELL_CANDIDATE, SPELL_LEGACY, SPELL_EXTRA.length);
+    }
+
+    /** Schema 5: the appended part of an approved play's candidate vector (see {@link #SPELL_EXTRA}). */
+    static float[] spellCandidateExtra(forge.game.spellability.SpellAbility sa, int manaUntapped, int cmc, boolean castableNow,
+                                       boolean instantSpeed, float[] pips, boolean hasX, int[] affected) {
+        float[] e = new float[SPELL_EXTRA.length];
+        int i = 0;
+        e[i++] = manaUntapped; e[i++] = manaUntapped - cmc; e[i++] = instantSpeed ? 1 : 0; e[i++] = castableNow ? 1 : 0;
+        for (int k = 0; k < 7; k++) e[i++] = pips[k];
+        e[i++] = hasX ? 1 : 0;
+        String api = sa.getApi() == null ? "" : sa.getApi().name();
+        e[i++] = "DestroyAll".equals(api) ? 1 : 0; e[i++] = "DamageAll".equals(api) ? 1 : 0; e[i++] = "SacrificeAll".equals(api) ? 1 : 0;
+        e[i++] = affected[0]; e[i++] = affected[1];
+        return e;
+    }
+
+    /** Schema 5: the appended part of the pass candidate (only the untapped mana is set). */
+    static float[] passCandidateExtra(int manaUntapped) {
+        float[] e = new float[SPELL_EXTRA.length];
+        e[0] = manaUntapped; e[1] = manaUntapped;
+        return e;
+    }
+
+    /** {@code a} followed by {@code b} */
+    static float[] concat(float[] a, float[] b) {
+        float[] c = java.util.Arrays.copyOf(a, a.length + b.length);
+        System.arraycopy(b, 0, c, a.length, b.length);
+        return c;
     }
 
     /** The "pass priority" candidate of a spell-choice decision. */
     public static float[] passCandidate(int rank, int manaAvail) {
-        float[] a = new float[SPELL_CANDIDATE.length];
+        float[] a = new float[SPELL_LEGACY];
         a[0] = 1; a[1] = rank; a[31] = manaAvail;
         return a;
     }
@@ -230,7 +274,7 @@ public final class Features {
      */
     public static float[] spellCandidate(Player acting, forge.game.spellability.SpellAbility sa, int rank, boolean stockPick,
                                          List<Player> seats, int manaAvail) {
-        float[] a = new float[SPELL_CANDIDATE.length];
+        float[] a = new float[SPELL_LEGACY];
         int i = 0;
         a[i++] = 0; a[i++] = rank; a[i++] = stockPick ? 1 : 0;
         a[i++] = sa.isSpell() ? 1 : 0; a[i++] = sa.isActivatedAbility() ? 1 : 0; a[i++] = sa.isPwAbility() ? 1 : 0; a[i++] = sa.isCycling() ? 1 : 0;
