@@ -38,6 +38,8 @@ public class CombatSolverParityTest {
     /** learned-ai D22: Python preset('d22_v1') aligned with Java d22() (py-data 2026-11-08 d, fork beb06b2305a);
      * no card-impact table (the rec carries no card names), so Config.d22() with impact null */
     private static final String FIXTURE_D22 = "/forge/ai/learned/combat_solver_parity-d22v1.jsonl.gz";
+    /** issue #28: the d22v1 fixture plus schema-7 rows with attack requirements (py-data bc96296, 633 rows) */
+    private static final String FIXTURE_D22_REQS = "/forge/ai/learned/combat_solver_parity-d22v1-reqs.jsonl.gz";
 
     static List<Row> load() throws Exception { return load(FIXTURE); }
 
@@ -92,6 +94,8 @@ public class CombatSolverParityTest {
                 for (JsonElement d : r.getAsJsonArray()) { CombatSolver.Target t = target(in, d); if (t != null) ts.add(t); }
                 if (!ts.isEmpty()) in.mustAttackAny.add(ts);
             }
+        if (rec.has("mustAttackCards"))
+            for (JsonElement e : rec.getAsJsonArray("mustAttackCards")) in.mustAttack.add(e.getAsInt());
         if (rec.has("noAttack"))
             for (Map.Entry<String, JsonElement> e : rec.getAsJsonObject("noAttack").entrySet()) {
                 java.util.Set<CombatSolver.Target> ts = new java.util.HashSet<>();
@@ -202,11 +206,32 @@ public class CombatSolverParityTest {
     /** the D22 preset (Config.d22()) against Python preset('d22_v1') on every field the fixture carries; the
      * decision fields (line, mode, fallback, lethal, rank, verdicts, exempt, protected) must all match */
     @Test
-    public void matchesPythonD22v1Preset() throws Exception {
-        List<Row> rows = load(FIXTURE_D22);
+    public void matchesPythonD22v1Preset() throws Exception { d22Parity(FIXTURE_D22, false); }
+
+    /** issue #28: the same comparison on the fixture with attack requirements, plus forced / reqState / playerReqUnmet */
+    @Test
+    public void matchesPythonD22v1PresetWithRequirements() throws Exception {
+        List<Row> rows = d22Parity(FIXTURE_D22_REQS, true);
+        int withReq = 0;
+        for (Row x : rows) if (!x.in.mustAttack.isEmpty() || !x.in.mustAttackAny.isEmpty() || !x.in.noAttack.isEmpty()) withReq++;
+        System.out.println("CombatSolver d22v1-reqs: " + withReq + " rows carry requirements / bans");
+        AssertJUnit.assertTrue("requirement rows present", withReq > 0);
+    }
+
+    static List<Integer> ints(JsonObject py, String k) {
+        List<Integer> out = new ArrayList<>();
+        if (py.has(k) && !py.get(k).isJsonNull()) for (JsonElement e : py.getAsJsonArray(k)) out.add(e.getAsInt());
+        return out;
+    }
+
+    static List<Row> d22Parity(String fixture, boolean reqFields) throws Exception {
+        List<Row> rows = load(fixture);
         AssertJUnit.assertTrue("d22v1 fixture has >= 300 snapshots", rows.size() >= 300);
-        String[] fields = {"chosen", "mode", "fallback", "lethal", "rank", "threat", "n_eval", "n_feasible", "key",
-                "elig", "exempt", "protected", "value", "top"};
+        String[] fields = reqFields
+                ? new String[]{"chosen", "mode", "fallback", "lethal", "rank", "threat", "n_eval", "n_feasible", "key",
+                        "elig", "exempt", "protected", "value", "top", "forced", "reqState", "playerReqUnmet"}
+                : new String[]{"chosen", "mode", "fallback", "lethal", "rank", "threat", "n_eval", "n_feasible", "key",
+                        "elig", "exempt", "protected", "value", "top"};
         Map<String, Integer> ok = new LinkedHashMap<>();
         Map<String, String> example = new LinkedHashMap<>();
         for (String f : fields) ok.put(f, 0);
@@ -250,6 +275,15 @@ public class CombatSolverParityTest {
             cmp.put("protected", new Object[]{wp.equals(gp), wp, gp});
             cmp.put("value", new Object[]{valOk, wantVal, gotVal});
             cmp.put("top", new Object[]{wantTop.equals(gotTop), wantTop, gotTop});
+            if (reqFields) {   // absent in the fixture = none / false
+                List<Integer> wf = ints(py, "forced"), gf = new ArrayList<>(r.forced);
+                java.util.Collections.sort(wf);
+                cmp.put("forced", new Object[]{wf.equals(gf), wf, gf});
+                List<Integer> wr = ints(py, "reqState");
+                cmp.put("reqState", new Object[]{wr.equals(r.reqState), wr, r.reqState});
+                boolean wu = py.has("playerReqUnmet") && py.get("playerReqUnmet").getAsBoolean();
+                cmp.put("playerReqUnmet", new Object[]{wu == r.playerReqUnmet, wu, r.playerReqUnmet});
+            }
             for (Map.Entry<String, Object[]> e : cmp.entrySet()) {
                 Object[] v = e.getValue();
                 if ((Boolean) v[0]) ok.merge(e.getKey(), 1, Integer::sum);
@@ -257,7 +291,7 @@ public class CombatSolverParityTest {
                         + " (mode " + r.mode + ", lethal " + r.lethalOverride + ")");
             }
         }
-        StringBuilder sb = new StringBuilder("CombatSolver d22v1 parity (" + rows.size() + " rows):");
+        StringBuilder sb = new StringBuilder("CombatSolver d22v1 parity " + fixture.substring(fixture.lastIndexOf('/') + 1) + " (" + rows.size() + " rows):");
         for (String f : fields) sb.append(' ').append(f).append(' ').append(ok.get(f));
         System.out.println(sb);
         for (Map.Entry<String, String> e : example.entrySet()) System.out.println("  mismatch " + e.getKey() + ": " + e.getValue());
@@ -270,8 +304,9 @@ public class CombatSolverParityTest {
         }
         System.out.printf("CombatSolver protectedKillAll off: %d lines and %d modes differ from d22()%n", kaLine, kaMode);
         AssertJUnit.assertTrue("protectedKillAll is exercised by the fixture", kaLine + kaMode > 0);
-        for (String f : new String[]{"chosen", "mode", "fallback", "lethal", "rank", "elig", "exempt", "protected"})
+        for (String f : fields)
             AssertJUnit.assertEquals("d22v1 field " + f + " matching Python", rows.size(), (int) ok.get(f));
+        return rows;
     }
 
     @Test

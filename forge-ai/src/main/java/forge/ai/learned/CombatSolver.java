@@ -7,10 +7,12 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 
 /**
  * learned-ai D19/D22: deterministic attack-declaration solver, a line-for-line port of the Python attack search
@@ -170,6 +172,11 @@ public final class CombatSolver {
          * Enforced when some eligible creature can attack there: the D22_V1 rule yields to it minimally (one
          * rule-breaking attacker per unmet requirement) and lines that miss it are dropped. Empty = Python. */
         public List<Set<Target>> mustAttackAny = new ArrayList<>();
+        /** issue #28 parity (Python mustAttackCards): creatures that must attack, the defender left to the objective.
+         * Each is its own group, eligible regardless of canAttack, with one option per target it is not banned from
+         * (no home option), and gets no D22_V1 verdict. Not forced when banned from every target. {@link #fixed} wins.
+         * Empty online (the hook fixes such creatures on the engine's defender instead). */
+        public Set<Integer> mustAttack = new LinkedHashSet<>();
     }
 
     /** One attacker's target: a player seat, or a planeswalker (pwId >= 0) controlled by that seat. */
@@ -229,6 +236,10 @@ public final class CombatSolver {
         /** issue #28: per {@link Input#mustAttackAny} entry: 1 = enforced (some line meets it), 0 = no eligible creature
          * can meet it, -1 = enforceable but no candidate line met it (beam pruning; the caller's validity check decides) */
         public final List<Integer> reqState = new ArrayList<>();
+        /** issue #28: no candidate line met every enforceable requirement (all lines were kept) */
+        public boolean playerReqUnmet;
+        /** issue #28: the {@link Input#mustAttack} creatures that were forced (eligible, not banned everywhere) */
+        public final Set<Integer> forced = new TreeSet<>();
         /** chosen attackers that break the D22_V1 rule, excused by the line's kill (lethal exemption) */
         public final List<Integer> exempt = new ArrayList<>();
         /** {@link Input#compare} scored by the same objective (null when absent or not representable: an attacker the
@@ -606,6 +617,11 @@ public final class CombatSolver {
         /** per group and target: D22_V1 verdict (null when the rule is off or the group is fixed) */
         String[][] verdict;
         final Set<Integer> fixedIds = new HashSet<>();
+        /** issue #28: per creature id, its banned target indices (only bans on a current target count) */
+        final Map<Integer, Set<Integer>> banT = new HashMap<>();
+        /** issue #28: Input.mustAttack creatures that are forced here; per group: is it such a group */
+        final Set<Integer> forced = new HashSet<>();
+        boolean[] isForced;
 
         Ctx(Input in, Config P) {
             this.P = P; this.in = in;
@@ -643,18 +659,26 @@ public final class CombatSolver {
                 int ti = targets.indexOf(e.getValue());
                 if (ti >= 0) { fixedTi.put(e.getKey(), ti); fixedIds.add(e.getKey()); }
             }
+            for (Map.Entry<Integer, Set<Target>> e : in.noAttack.entrySet()) {
+                Set<Integer> ts = new TreeSet<>();
+                for (int t = 0; t < T; t++) if (e.getValue().contains(targets.get(t))) ts.add(t);
+                if (!ts.isEmpty()) banT.put(e.getKey(), ts);
+            }
+            for (Creature c : me.creatures)
+                if (in.mustAttack.contains(c.id) && !fixedIds.contains(c.id) && banT.getOrDefault(c.id, Collections.emptySet()).size() < T) forced.add(c.id);
             for (Creature c : me.creatures) {
                 mine.add(units.get(c.id));
-                if (in.eligibility != null && !in.forcedEligible.contains(c.id) && !fixedIds.contains(c.id) && !in.eligibility.mayAttack(c, in)) vetoed.add(c.id);
+                if (in.eligibility != null && !in.forcedEligible.contains(c.id) && !fixedIds.contains(c.id) && !forced.contains(c.id) && !in.eligibility.mayAttack(c, in)) vetoed.add(c.id);
             }
-            for (Unit u : mine) if ((u.canAttack || in.forcedEligible.contains(u.id) || fixedIds.contains(u.id)) && !u.tapped && !vetoed.contains(u.id)) eligible.add(u);
-            for (Unit u : mine) if (u.tapped && (in.forcedEligible.contains(u.id) || fixedIds.contains(u.id))) eligible.add(u);
+            // issue #28: a banned creature can attack some other target (canAttack is judged against one defender)
+            for (Unit u : mine) if ((u.canAttack || in.forcedEligible.contains(u.id) || fixedIds.contains(u.id) || forced.contains(u.id) || banned(u.id)) && !u.tapped && !vetoed.contains(u.id)) eligible.add(u);
+            for (Unit u : mine) if (u.tapped && (in.forcedEligible.contains(u.id) || fixedIds.contains(u.id) || forced.contains(u.id))) eligible.add(u);
             Set<Integer> elig = new HashSet<>();
             for (Unit u : eligible) elig.add(u.id);
             for (Unit u : mine) if (!elig.contains(u.id) && !u.tapped && u.canBlock) baseBlockers.add(u);
             Map<String, List<Unit>> g = new LinkedHashMap<>();
             for (Unit u : eligible) {
-                String key = fixedIds.contains(u.id) ? "f" + u.id : banned(u.id) ? "n" + u.id : u.sig == null ? "c" + u.id
+                String key = fixedIds.contains(u.id) ? "f" + u.id : forced.contains(u.id) ? "m" + u.id : banned(u.id) ? "n" + u.id : u.sig == null ? "c" + u.id
                         : P.valueModel == ValueModel.PT ? "s" + u.sig : "s" + u.sig + "|" + u.value + "|" + u.prot;
                 g.computeIfAbsent(key, k -> new ArrayList<>()).add(u);
             }
@@ -668,17 +692,25 @@ public final class CombatSolver {
             });
             groupBlocks = new boolean[groups.size()];
             fixedT = new int[groups.size()];
+            isForced = new boolean[groups.size()];
             for (int i = 0; i < groups.size(); i++) {
                 Unit u0 = groups.get(i).get(0);
                 Integer ft = fixedTi.get(u0.id);
                 fixedT[i] = ft == null ? -1 : ft;
                 if (ft != null) { int[] v = new int[T]; v[ft] = 1; List<int[]> one = new ArrayList<>(); one.add(v); options.add(one); }
+                else if (forced.contains(u0.id)) {   // issue #28: attacks exactly one target it is not banned from
+                    isForced[i] = true;
+                    Set<Integer> no = banT.getOrDefault(u0.id, Collections.emptySet());
+                    List<int[]> opts = new ArrayList<>();
+                    for (int t = 0; t < T; t++) if (!no.contains(t)) { int[] v = new int[T]; v[t] = 1; opts.add(v); }
+                    options.add(opts);
+                }
                 else if (banned(u0.id)) {   // issue #28: never send it where it may not attack
-                    Set<Target> no = in.noAttack.get(u0.id);
+                    Set<Integer> no = banT.get(u0.id);
                     List<int[]> keep = new ArrayList<>();
                     for (int[] v : groupOptions(groups.get(i).size())) {
                         boolean good = true;
-                        for (int t = 0; t < T; t++) if (v[t] != 0 && no.contains(targets.get(t))) { good = false; break; }
+                        for (int t = 0; t < T; t++) if (v[t] != 0 && no.contains(t)) { good = false; break; }
                         if (good) keep.add(v);
                     }
                     options.add(keep);
@@ -713,7 +745,7 @@ public final class CombatSolver {
                 lethalExempt = P.lethalExempt && P.lethalScope != LethalScope.OFF && killPossible();
                 boolean killAll = lethalExempt && P.protectedKillAll && killAllPossible();
                 for (int gi = 0; gi < groups.size(); gi++) {
-                    if (fixedT[gi] >= 0) continue;
+                    if (fixedT[gi] >= 0 || isForced[gi]) continue;   // forced: no verdict, never a rule breaker
                     Unit u0 = groups.get(gi).get(0);
                     protGroup[gi] = u0.prot;
                     String[] vs = new String[T];
@@ -746,7 +778,7 @@ public final class CombatSolver {
         final List<boolean[]> reqMask = new ArrayList<>();
         final List<Boolean> reqActive = new ArrayList<>();
 
-        boolean banned(int id) { Set<Target> no = in.noAttack.get(id); return no != null && !no.isEmpty(); }
+        boolean banned(int id) { return banT.containsKey(id); }
 
         boolean hasReq() { return reqActive.contains(Boolean.TRUE); }
 
@@ -861,6 +893,7 @@ public final class CombatSolver {
         int[] homeVec(int gi) {
             int[] v = new int[T];
             if (fixedT[gi] >= 0) v[fixedT[gi]] = 1;
+            else if (isForced[gi]) return options.get(gi).get(0).clone();   // its first allowed target
             return v;
         }
 
@@ -1316,6 +1349,8 @@ public final class CombatSolver {
         res.targets.addAll(ctx.targets);
         res.fixedIds.addAll(ctx.fixedIds);
         for (int r = 0; r < ctx.reqMask.size(); r++) res.reqState.add(!ctx.reqActive.get(r) ? 0 : reqMet ? 1 : -1);
+        res.playerReqUnmet = !reqMet;
+        res.forced.addAll(ctx.forced);
         res.exempt.addAll(ctx.exempted(chosen));
         if (in.compare != null) {
             int[][] asg = new int[G][ctx.T];
