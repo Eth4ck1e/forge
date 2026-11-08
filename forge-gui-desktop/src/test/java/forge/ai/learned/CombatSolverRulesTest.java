@@ -106,6 +106,51 @@ public class CombatSolverRulesTest {
     }
 
     @Test
+    public void lethalExemptionOnLastOpponent() {
+        // bears fail the trade test against a 3/3, but together they kill the last opponent: the rule does not apply
+        CombatSolver.Input in = board(seat(1, 40, cr(1, "Bear", 2, 2, false, false), cr(2, "Bear", 2, 2, false, false)),
+                seat(2, 2, cr(10, "Ogre", 3, 3, false, false)));
+        CombatSolver.Result r = CombatSolver.solve(in, CombatSolver.Config.d22());
+        AssertJUnit.assertEquals("no:trade", r.elig.get(1)[0]);
+        AssertJUnit.assertEquals(2, r.attacks.size());
+        AssertJUnit.assertTrue(r.chosen.elim.contains(2));
+        AssertJUnit.assertEquals(2, r.exempt.size());
+        CombatSolver.Config off = CombatSolver.Config.d22(); off.lethalExempt = false;
+        AssertJUnit.assertTrue("without the exemption nobody attacks", CombatSolver.solve(in, off).attacks.isEmpty());
+    }
+
+    @Test
+    public void protectedPieceJoinsOnlyALastOpponentKill() {
+        // seat 2 (not the last opponent) dies to the two bears; our commander would die to its 3/3 and stays out of it
+        CombatSolver.Input in = board(seat(1, 40, cr(1, "Our Commander", 2, 2, true, false), cr(2, "Bear", 2, 2, false, false), cr(3, "Bear", 2, 2, false, false)),
+                seat(2, 2, cr(10, "Ogre", 3, 3, false, false)), seat(3, 40));
+        CombatSolver.Result r = CombatSolver.solve(in, CombatSolver.Config.d22());
+        AssertJUnit.assertTrue(r.chosen.elim.contains(2));
+        AssertJUnit.assertEquals("2", String.valueOf(r.attacks.get(2)));
+        AssertJUnit.assertEquals("2", String.valueOf(r.attacks.get(3)));
+        AssertJUnit.assertFalse("commander not sent into seat 2", "2".equals(String.valueOf(r.attacks.get(1))));
+        // as the last opponent, the commander may join the kill
+        CombatSolver.Input last = board(seat(1, 40, cr(1, "Our Commander", 2, 2, true, false)), seat(2, 2, cr(10, "Ogre", 3, 3, false, false), cr(11, "Ogre", 3, 3, false, true)));
+        CombatSolver.Input lastBlk = board(seat(1, 40, cr(1, "Our Commander", 2, 2, true, false), cr(2, "Bear", 2, 2, false, false)),
+                seat(2, 2, cr(10, "Ogre", 3, 3, false, false)));
+        r = CombatSolver.solve(lastBlk, CombatSolver.Config.d22());
+        AssertJUnit.assertEquals(2, r.attacks.size());
+        AssertJUnit.assertTrue(r.exempt.contains(1));
+        AssertJUnit.assertNotNull(CombatSolver.solve(last, CombatSolver.Config.d22()));
+    }
+
+    @Test
+    public void opponentsCommanderCountsAtLeastItsProxyValueInTheTradeTest() {
+        CombatSolver.Input in = board(seat(1, 40, cr(1, "Ox", 4, 4, false, false)),
+                seat(2, 40, cr(10, "Their Commander", 4, 4, true, false)));
+        CombatSolver.Config c = CombatSolver.Config.d22();
+        c.impact = new CardImpact(new java.util.HashMap<>(Map.of("Their Commander", -0.2, "A", 0.1, "B", 0.1)), "t");
+        AssertJUnit.assertEquals("ok:trade", CombatSolver.solve(in, c).elig.get(1)[0]);
+        c.protectedBlockerFloor = false;
+        AssertJUnit.assertEquals("no:trade", CombatSolver.solve(in, c).elig.get(1)[0]);
+    }
+
+    @Test
     public void cardImpactTable() throws Exception {
         String js = "{\"A\": {\"creature\": true, \"threat_shrunk\": 0.0}, \"B\": {\"creature\": true, \"threat_shrunk\": 0.1},"
                 + " \"C\": {\"creature\": true, \"threat_shrunk\": 0.2}, \"D\": {\"creature\": false, \"threat_shrunk\": 9.0},"

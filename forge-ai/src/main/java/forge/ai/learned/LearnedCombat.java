@@ -215,6 +215,7 @@ public final class LearnedCombat {
         boolean first = true;
         for (Integer id : board.input.fixed.keySet()) { if (!first) sb.append(','); first = false; sb.append(id); }
         sb.append("],\"dropped\":[").append(String.join(",", dropped)).append(']');
+        sb.append(",\"exempt\":").append(res == null ? "[]" : res.exempt.toString().replace(" ", ""));   // lethal exemption
         sb.append(",\"declared\":{");
         first = true;
         for (Card a : combat.getAttackers()) {

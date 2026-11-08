@@ -140,6 +140,25 @@ public class CombatSolverParityTest {
         System.out.printf("CombatSolver D22 preset: %d rows, %d with a feasible (or lethal) line; EXPECTED(p=0.3) feasible %d%n", n, feasibleOrLethal, feasibleExpected);
     }
 
+    /** D22 lethal exemption: how often a killable top threat is killed (killable = some line kills it with the rule off) */
+    @Test
+    public void lethalExemptionTakesKillableTopThreats() throws Exception {
+        int killable = 0, on = 0, off = 0;
+        for (Row x : load()) {
+            CombatSolver.Config free = CombatSolver.Config.d22(); free.attackRule = CombatSolver.AttackRule.NONE;
+            CombatSolver.Result f = CombatSolver.solve(x.in, free);
+            if (f == null || f.threatRank.isEmpty() || !f.chosen.elim.contains(f.threatRank.get(0))) continue;
+            killable++;
+            CombatSolver.Result a = CombatSolver.solve(x.in, CombatSolver.Config.d22());
+            CombatSolver.Config c = CombatSolver.Config.d22(); c.lethalExempt = false;
+            CombatSolver.Result b = CombatSolver.solve(x.in, c);
+            if (a.chosen.elim.contains(a.threatRank.get(0))) on++;
+            if (b.chosen.elim.contains(b.threatRank.get(0))) off++;
+        }
+        System.out.printf("CombatSolver lethal exemption: top threat killed in %d/%d killable rows (without the exemption %d)%n", on, killable, off);
+        AssertJUnit.assertTrue(on >= off);
+    }
+
     /** strictKill (default) may change a line only to take an elimination of threat #1 that the Python line missed */
     @Test
     public void strictKillOnlyAddsKills() throws Exception {

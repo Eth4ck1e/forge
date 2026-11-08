@@ -86,6 +86,11 @@ public final class CombatSolver {
         public int maxBlock = 3;
         /** candidate lines kept in {@link Result#top} (chosen first) */
         public int topN = 5;
+        /** D22_V1 applies to non-lethal attacks only: kill lines within the lethal scope may break it (see Ctx.admissible) */
+        public boolean lethalExempt = true;
+        /** trade test: the defender's protected blockers (its commander, top-decile impact) never count below their
+         * proxy value, i.e. a below-median card-impact term does not discount them */
+        public boolean protectedBlockerFloor = true;
 
         /** D22 preset (same as new Config()) */
         public static Config d22() { return new Config(); }
@@ -208,6 +213,8 @@ public final class CombatSolver {
         public final List<Target> targets = new ArrayList<>();
         /** fixed attackers whose target was honoured */
         public final Set<Integer> fixedIds = new HashSet<>();
+        /** chosen attackers that break the D22_V1 rule, excused by the line's kill (lethal exemption) */
+        public final List<Integer> exempt = new ArrayList<>();
         /** {@link Input#compare} scored by the same objective (null when absent or not representable: an attacker the
          * solver does not know as eligible, or a target it does not know) */
         public Line compare;
@@ -236,6 +243,9 @@ public final class CombatSolver {
         Integer col;
         String name;
         boolean cmd, tapped, sick, canAttack, canBlock, prot;
+        /** value of this unit as a dead blocker in the D22_V1 trade test (NaN = value) */
+        double tradeValue = Double.NaN;
+        double tv() { return Double.isNaN(tradeValue) ? value : tradeValue; }
         boolean fs, ds, dt, tr, ll, ind, inf, wit, fly, reach, menace, vig, defender, shadow, horse, skulk, fear, intim, unblk;
         double value;
         String sig;   // null for commanders (never grouped)
@@ -367,7 +377,7 @@ public final class CombatSolver {
         int dmg = Math.max(a.p, 0) * (a.ds ? 2 : 1);
         List<Unit> dead = new ArrayList<>();
         List<Unit> order = new ArrayList<>(bl);
-        order.sort((x, y) -> { int c = Double.compare(y.value, x.value); return c != 0 ? c : Integer.compare(x.id, y.id); });
+        order.sort((x, y) -> { int c = Double.compare(y.tv(), x.tv()); return c != 0 ? c : Integer.compare(x.id, y.id); });
         for (Unit b : order) {
             if (protectedFrom(b, a) || b.ind || dmg <= 0) continue;
             int need = a.dt ? 1 : Math.max(b.hp(), 0);
@@ -419,7 +429,7 @@ public final class CombatSolver {
         for (Object[] r : res) {
             double ours = (Boolean) r[0] ? a.value : 0, theirs = 0;
             @SuppressWarnings("unchecked") List<Unit> dead = (List<Unit>) r[1];
-            for (Unit d : dead) theirs += d.value;
+            for (Unit d : dead) theirs += d.tv();
             if (ours - theirs > bo - bt + 1e-9) { bo = ours; bt = theirs; }
         }
         return bt >= bo - 1e-9 ? "ok:trade" : "no:trade";
@@ -594,6 +604,10 @@ public final class CombatSolver {
                     if (P.valueModel == ValueModel.D22) {
                         u.value = d22Value(u, P.impact, P);
                         u.prot = u.cmd || (P.impact != null && u.name != null && P.impact.isTop(u.name));
+                        // coordinator 2026-11-08 b: an opponent's commander / high-impact blocker counts at least its
+                        // proxy value in the trade test (a below-median impact term does not discount it)
+                        if (P.protectedBlockerFloor && u.prot && s.seat != in.actingSeat)
+                            u.tradeValue = Math.max(u.value, d22Value(u, null, P));
                     }
                     u.prot |= c.protectedPiece;
                     units.put(c.id, u);
@@ -659,15 +673,23 @@ public final class CombatSolver {
                 oppBlk.put(s.seat, blk); oppAtt.put(s.seat, att);
             }
             verdict = new String[groups.size()][];
+            allowed = new boolean[groups.size()][];
+            protGroup = new boolean[groups.size()];
             if (P.attackRule == AttackRule.D22_V1) {
-                // per group and target: may this creature attack that defender (player or its planeswalker)?
+                // lethal exemption (coordinator 2026-11-08 b): the rule applies to non-lethal attacks only. When some
+                // opponent could die this combat, groups keep their unfiltered options (protected groups only with one
+                // opponent left) and solve() drops the lines that break the rule without a kill that excuses it.
+                lethalExempt = P.lethalExempt && P.lethalScope != LethalScope.OFF && killPossible();
                 for (int gi = 0; gi < groups.size(); gi++) {
                     if (fixedT[gi] >= 0) continue;
                     Unit u0 = groups.get(gi).get(0);
+                    protGroup[gi] = u0.prot;
                     String[] vs = new String[T];
                     boolean[] ok = new boolean[T];
                     for (int t = 0; t < T; t++) { vs[t] = attackEligible(u0, oppBlk.get(targets.get(t).seat), P); ok[t] = vs[t].startsWith("ok"); }
                     verdict[gi] = vs;
+                    allowed[gi] = ok;
+                    if (lethalExempt && (!u0.prot || opps.size() == 1)) continue;
                     List<int[]> keep = new ArrayList<>();
                     for (int[] v : options.get(gi)) {
                         boolean good = true;
@@ -678,6 +700,51 @@ public final class CombatSolver {
                 }
             }
             threats();
+        }
+
+        /** per group and target: the D22_V1 verdict as a boolean (null = unrestricted: rule off or fixed group) */
+        boolean[][] allowed;
+        boolean[] protGroup;
+        boolean lethalExempt;
+
+        /** could any living opponent be eliminated by all our eligible attackers together (unblocked)? */
+        private boolean killPossible() {
+            int dmg = 0, inf = 0, cmd = 0;
+            for (Unit u : eligible) { int p = u.potential(); if (u.inf) inf += p; else dmg += p; if (u.cmd) cmd += p; }
+            for (Seat s : opps)
+                if (dmg >= s.life || s.poison + inf >= 10 || (cmd > 0 && s.cmdDmgFromActing + cmd >= 21)) return true;
+            return false;
+        }
+
+        /** the lethal exemption: a line that breaks the attack rule is kept only if every rule-breaking attacker
+         * attacks a player this line eliminates, and either every opponent dies (protected pieces allowed) or the
+         * line is feasible and no rule breaker is protected. Lines that keep the rule are always admissible. */
+        boolean admissible(Profile p) {
+            if (!lethalExempt) return true;
+            boolean all = p.elim.size() == opps.size();
+            for (int gi = 0; gi < groups.size(); gi++) {
+                if (allowed[gi] == null) continue;
+                for (int t = 0; t < T; t++) {
+                    if (p.asg[gi][t] == 0 || allowed[gi][t]) continue;
+                    Target tg = targets.get(t);
+                    if (tg.isPlaneswalker() || !p.elim.contains(tg.seat)) return false;
+                    if (!all && (protGroup[gi] || !p.feasible)) return false;
+                }
+            }
+            return true;
+        }
+
+        /** attackers of p that break the attack rule (excused by its kill) */
+        List<Integer> exempted(Profile p) {
+            List<Integer> out = new ArrayList<>();
+            if (!lethalExempt) return out;
+            for (int gi = 0; gi < groups.size(); gi++) {
+                if (allowed[gi] == null) continue;
+                List<Unit> g = groups.get(gi); int k = 0;
+                for (int t = 0; t < T; t++)
+                    for (int n = 0; n < p.asg[gi][t] && k < g.size(); n++, k++) if (!allowed[gi][t]) out.add(g.get(k).id);
+            }
+            return out;
         }
 
         /** the "nothing chosen" vector of group gi: all home, or its fixed target */
@@ -1097,6 +1164,11 @@ public final class CombatSolver {
             for (int[][] c : cands) if (sameAsg(c, home)) { has = true; break; }
             if (!has) { cands.add(home); profs.addAll(evaluate(ctx, List.<int[][]>of(home))); }
         }
+        if (ctx.lethalExempt) {   // drop rule-breaking lines that no kill excuses (all-home always stays)
+            List<int[][]> c2 = new ArrayList<>(); List<Profile> p2 = new ArrayList<>();
+            for (int i = 0; i < profs.size(); i++) if (ctx.admissible(profs.get(i))) { c2.add(cands.get(i)); p2.add(profs.get(i)); }
+            cands = c2; profs = p2;
+        }
         int[] sel = select(profs, P);
         int ci = sel[0];
         Result res = new Result();
@@ -1127,6 +1199,7 @@ public final class CombatSolver {
         }
         res.targets.addAll(ctx.targets);
         res.fixedIds.addAll(ctx.fixedIds);
+        res.exempt.addAll(ctx.exempted(chosen));
         if (in.compare != null) {
             int[][] asg = new int[G][ctx.T];
             int found = 0;
