@@ -155,6 +155,79 @@ public final class CombatBoard {
         return b;
     }
 
+    /**
+     * issue #28 parity inputs for an {@code attackers} combat_snapshot (schema 7), read-only and declaration-independent:
+     * {@code "mustAttackCards":[ids]} = the acting seat's creatures that must attack if able (MustAttack SVar, goad, or an
+     * unconditional requirement) and are able now; {@code "mustAttackAny":[[defs]]} = per player-level requirement
+     * (PlayerMustAttack static, e.g. Seeker of Slaanesh), the defenders that satisfy it; {@code "noAttack":{"id":[defs]}}
+     * = per creature of the acting seat that can attack some opponent defender for free, the opponent defenders it
+     * can't attack or only with an attack cost. A def is a seat number or "pw:&lt;card id&gt;" (as {@code declared.def});
+     * only living opponents and their planeswalkers count (the solver's targets), so the fields equal the solver
+     * {@link CombatSolver.Input}'s {@code mustAttackAny} / {@code noAttack} (Java skips noAttack for fixed creatures).
+     */
+    static void requirementsJson(StringBuilder sb, Player ai, Combat combat) {
+        Game game = ai.getGame();
+        List<GameEntity> opp = new ArrayList<>();
+        for (GameEntity d : combat.getDefenders()) if (snapDef(ai, d) != null) opp.add(d);
+        Map<Card, AttackRequirement> reqs = combat.getAttackConstraints().getRequirements();
+        sb.append(",\"mustAttackCards\":[");
+        boolean first = true;
+        for (Card c : ai.getCreaturesInPlay()) {
+            boolean must = "True".equals(c.getSVar("MustAttack")) || c.isGoaded() || unconditional(reqs.get(c));
+            if (!must || c.isTapped() || !CombatUtil.canAttack(c)) continue;
+            if (!first) sb.append(','); first = false; sb.append(c.getId());
+        }
+        sb.append("],\"mustAttackAny\":[");
+        first = true;
+        Multimap<GameEntity, StaticAbility> pr = StaticAbilityMustAttack.mustAttackSpecific(ai, combat.getDefenders());
+        if (!pr.isEmpty()) {
+            Multimap<StaticAbility, GameEntity> inv = Multimaps.invertFrom(pr, MultimapBuilder.hashKeys().arrayListValues().build());
+            for (Collection<GameEntity> defs : inv.asMap().values()) {
+                StringBuilder one = new StringBuilder();
+                Set<String> seen = new HashSet<>();
+                for (GameEntity d : defs) {
+                    String t = snapDef(ai, d);
+                    if (t == null || !seen.add(t)) continue;
+                    if (one.length() > 0) one.append(',');
+                    one.append(t);
+                }
+                if (one.length() == 0) continue;   // as CombatBoard.build: a requirement with no solver target is dropped
+                if (!first) sb.append(','); first = false;
+                sb.append('[').append(one).append(']');
+            }
+        }
+        sb.append("],\"noAttack\":{");
+        first = true;
+        for (Card c : ai.getCreaturesInPlay()) {
+            boolean can = false;
+            for (GameEntity d : opp) if (CombatUtil.canAttack(c, d) && CombatUtil.getAttackCost(game, c, d) == null) { can = true; break; }
+            if (!can) continue;
+            StringBuilder one = new StringBuilder();
+            for (GameEntity d : opp) {
+                if (CombatUtil.canAttack(c, d) && CombatUtil.getAttackCost(game, c, d) == null) continue;
+                if (one.length() > 0) one.append(',');
+                one.append(snapDef(ai, d));
+            }
+            if (one.length() == 0) continue;
+            if (!first) sb.append(','); first = false;
+            sb.append('"').append(c.getId()).append("\":[").append(one).append(']');
+        }
+        sb.append('}');
+    }
+
+    /** a defender in combat_snapshot form (seat number or "pw:id"), or null when it is not a solver target */
+    private static String snapDef(Player ai, GameEntity d) {
+        if (d instanceof Player) {
+            Player p = (Player) d;
+            return p != ai && p.isOpponentOf(ai) && !p.hasLost() ? String.valueOf(LearnedHooks.seatNumber(p)) : null;
+        }
+        if (d instanceof Card && ((Card) d).isPlaneswalker() && !((Card) d).isBattle()) {
+            Player p = ((Card) d).getController();
+            return p != ai && p.isOpponentOf(ai) && !p.hasLost() ? "\"pw:" + ((Card) d).getId() + "\"" : null;
+        }
+        return null;
+    }
+
     /** a requirement that holds whatever else attacks (goad, "attacks each combat if able", must attack X) */
     static boolean unconditional(AttackRequirement r) {
         if (r == null) return false;

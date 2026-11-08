@@ -6,8 +6,10 @@ import java.io.FileInputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.zip.GZIPInputStream;
 
 import org.testng.AssertJUnit;
@@ -111,6 +113,30 @@ public class CombatForcedAttackTest extends AITest {
         AssertJUnit.assertTrue("the engine accepts the declaration", CombatUtil.validateAttackers(game.getCombat()));
     }
 
+    private static String def(Object o) { return o instanceof Number ? String.valueOf(((Number) o).intValue()) : String.valueOf(o); }
+
+    /** schema 7: the attackers snapshot's requirement fields equal the solver input built from the same board */
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> snapshotMatchesBoard(Player me, Combat c, CombatBoard b) {
+        Map<String, Object> snap = new Gson().fromJson("{" + CombatSnapshot.json(me, c, "attackers") + "}", Map.class);
+        Set<Set<String>> any = new HashSet<>(), want = new HashSet<>();
+        for (Object r : (List<Object>) snap.get("mustAttackAny")) { Set<String> one = new HashSet<>(); for (Object d : (List<Object>) r) one.add(def(d)); any.add(one); }
+        for (Set<CombatSolver.Target> r : b.input.mustAttackAny) { Set<String> one = new HashSet<>(); for (CombatSolver.Target t : r) one.add(t.toString()); want.add(one); }
+        AssertJUnit.assertEquals(snap.toString(), want, any);
+        Map<String, Object> no = (Map<String, Object>) snap.get("noAttack");
+        for (Map.Entry<Integer, Set<CombatSolver.Target>> e : b.input.noAttack.entrySet()) {
+            Set<String> got = new HashSet<>(), exp = new HashSet<>();
+            for (Object d : (List<Object>) no.get(String.valueOf(e.getKey()))) got.add(def(d));
+            for (CombatSolver.Target t : e.getValue()) exp.add(t.toString());
+            AssertJUnit.assertEquals(snap.toString(), exp, got);
+        }
+        for (String id : no.keySet()) AssertJUnit.assertTrue(id, b.input.noAttack.containsKey(Integer.valueOf(id)) || b.input.fixed.containsKey(Integer.valueOf(id)));
+        Set<Integer> must = new HashSet<>();
+        for (Object o : (List<Object>) snap.get("mustAttackCards")) must.add(((Number) o).intValue());
+        AssertJUnit.assertEquals(snap.toString(), b.input.fixed.keySet(), must);   // empty stock declaration: fixed = must-attack
+        return snap;
+    }
+
     @SuppressWarnings("unchecked")
     @Test
     public void goadedAndMustAttackCreaturesAreInEverySolverLine() throws Exception {
@@ -129,6 +155,7 @@ public class CombatForcedAttackTest extends AITest {
         CombatBoard b = CombatBoard.build(me, empty);
         AssertJUnit.assertTrue(b.input.fixed.toString(), b.input.fixed.containsKey(bears.getId()) && b.input.fixed.containsKey(jugg.getId()));
         AssertJUnit.assertEquals("goad: not the goading player", 3, b.input.fixed.get(bears.getId()).seat);
+        snapshotMatchesBoard(me, empty, b);
         CombatSolver.Result res = CombatSolver.solve(b.input, LearnedCombat.config());
         for (CombatSolver.Line l : res.top)
             AssertJUnit.assertTrue(l.attacks.toString(), l.attacks.containsKey(bears.getId()) && l.attacks.containsKey(jugg.getId()));
@@ -162,6 +189,7 @@ public class CombatForcedAttackTest extends AITest {
         game.getAction().checkStateEffects(true);
         CombatBoard b = CombatBoard.build(me, empty);
         AssertJUnit.assertFalse("Seeker gives a player-level requirement", b.input.mustAttackAny.isEmpty());
+        AssertJUnit.assertFalse(((List<Object>) snapshotMatchesBoard(me, empty, b).get("mustAttackAny")).isEmpty());
         CombatSolver.Result res = CombatSolver.solve(b.input, LearnedCombat.config());
         AssertJUnit.assertTrue(res.reqState.toString(), res.reqState.contains(1));
         for (CombatSolver.Line l : res.top) AssertJUnit.assertEquals("exactly one attacker meets it: " + l.attacks, 1, l.attacks.size());
@@ -176,6 +204,7 @@ public class CombatForcedAttackTest extends AITest {
         AssertJUnit.assertTrue(bears.getId() > 0);
     }
 
+    @SuppressWarnings("unchecked")
     @Test
     public void attackCostBansThatDefender() throws Exception {
         newGame();
@@ -188,6 +217,7 @@ public class CombatForcedAttackTest extends AITest {
         CombatBoard b = CombatBoard.build(me, empty);
         AssertJUnit.assertTrue(b.input.noAttack.toString(), b.input.noAttack.containsKey(giant.getId())
                 && b.input.noAttack.get(giant.getId()).contains(CombatSolver.Target.player(2)));
+        snapshotMatchesBoard(me, empty, b);
         CombatSolver.Result res = CombatSolver.solve(b.input, LearnedCombat.config());
         for (CombatSolver.Line l : res.top) {
             CombatSolver.Target t = l.attacks.get(giant.getId());

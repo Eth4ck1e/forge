@@ -85,7 +85,29 @@ public class CombatSolverParityTest {
             in.seats.add(s);
         }
         for (JsonElement de : rec.getAsJsonArray("declared")) in.forcedEligible.add(de.getAsJsonObject().get("id").getAsInt());
+        // schema 7 (issue #28): optional, absent in fixtures dumped before it (then both stay empty, as before)
+        if (rec.has("mustAttackAny"))
+            for (JsonElement r : rec.getAsJsonArray("mustAttackAny")) {
+                java.util.Set<CombatSolver.Target> ts = new java.util.HashSet<>();
+                for (JsonElement d : r.getAsJsonArray()) { CombatSolver.Target t = target(in, d); if (t != null) ts.add(t); }
+                if (!ts.isEmpty()) in.mustAttackAny.add(ts);
+            }
+        if (rec.has("noAttack"))
+            for (Map.Entry<String, JsonElement> e : rec.getAsJsonObject("noAttack").entrySet()) {
+                java.util.Set<CombatSolver.Target> ts = new java.util.HashSet<>();
+                for (JsonElement d : e.getValue().getAsJsonArray()) { CombatSolver.Target t = target(in, d); if (t != null) ts.add(t); }
+                if (!ts.isEmpty()) in.noAttack.put(Integer.valueOf(e.getKey()), ts);
+            }
         return in;
+    }
+
+    /** a snapshot defender (seat number or "pw:<id>") as a solver target; null if it is not on the board */
+    static CombatSolver.Target target(CombatSolver.Input in, JsonElement d) {
+        String s = d.getAsString();
+        if (!s.startsWith("pw:")) return CombatSolver.Target.player(Integer.parseInt(s));
+        int id = Integer.parseInt(s.substring(3));
+        for (CombatSolver.Seat st : in.seats) for (CombatSolver.Planeswalker w : st.pws) if (w.id == id) return CombatSolver.Target.planeswalker(st.seat, id);
+        return null;
     }
 
     static Map<String, String> expected(JsonObject py) {

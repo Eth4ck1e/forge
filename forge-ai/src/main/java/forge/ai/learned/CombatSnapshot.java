@@ -100,6 +100,11 @@ import forge.game.zone.ZoneType;
  *   (Fixed 2026-11-05: up to e8aa32d1b07 {@code died} came from the graveyards' "added from battlefield" lists and
  *   missed deaths, e.g. commanders sent to the command zone; it had only {id, tok, seat}.)</li>
  * </ul>
+ *
+ * <p>Schema 7 (issue #28 parity inputs, 2026-11-08; {@code attackers} snapshots only, always present from schema 7,
+ * absent before): {@code mustAttackCards} [creature ids that must attack if able and are able],
+ * {@code mustAttackAny} [[defenders satisfying it] per player-level requirement], {@code noAttack}
+ * {"creature id": [banned defenders]}; defenders as in {@code declared.def}. See {@link CombatBoard#requirementsJson}.
  */
 public final class CombatSnapshot {
     private CombatSnapshot() {}
@@ -344,6 +349,8 @@ public final class CombatSnapshot {
             }
         }
         sb.append(']');
+        // schema 7 (issue #28 parity inputs): mustAttackCards, mustAttackAny, noAttack
+        if ("attackers".equals(kind)) CombatBoard.requirementsJson(sb, acting, combat);
         return sb.toString();
     }
 
