@@ -1980,7 +1980,7 @@ public class AiController {
                 // learned-ai: the seat plays stock here: candidates are logged from a saved state, then the stock pick
                 final List<SpellAbility> live = saList;
                 chosenSa = forge.ai.learned.LearnedHooks.observedSpellChoice(player, live,
-                        l -> chooseSpellAbilitiesToPlayFromList(l, true, forge.ai.learned.LearnedHooks.spellCandidates),
+                        (l, max) -> chooseSpellAbilitiesToPlayFromList(l, true, max),
                         () -> chooseSpellAbilityToPlayFromList(live, true));
             } else {
                 final List<SpellAbility> approved = chooseSpellAbilitiesToPlayFromList(saList, true, forge.ai.learned.LearnedHooks.spellCandidates);

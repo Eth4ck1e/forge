@@ -106,6 +106,7 @@ public final class LearnedHooks {
     static synchronized int countDecision(String hook, int seat, int nCands, int turn) {
         int[] c = COUNTS.computeIfAbsent(hook + "#" + seat, k -> new int[1]);
         int idx = c[0]++;
+        LAST_FORCED.set(-1);
         if (!forkConfigured || forkDone || seat != forkSeat || idx != forkIndex || !hook.equals(forkHook)) return -1;
         forkDone = true;
         if (forkChoose < 0 || forkChoose >= nCands) {
@@ -113,6 +114,7 @@ public final class LearnedHooks {
             return -1;
         }
         System.out.println("SIMNOTE fork applied seat=" + seat + " hook=" + hook + " index=" + idx + " choose=" + forkChoose + " turn=" + turn);
+        LAST_FORCED.set(forkChoose);
         return forkChoose;
     }
 
@@ -126,7 +128,9 @@ public final class LearnedHooks {
     /** Called after the forced decision is logged: reseeds the game's random source with the branch seed (0 = keep). */
     static void forkReseed() {
         if (forkSeed == 0) return;
-        if (SNAPSHOT_DEPTH.get()[0] > 0) { SNAPSHOT_DEPTH.get()[1] = 1; return; }   // inside a saved state: reseed after its restore
+        final int[] st = SNAPSHOT_DEPTH.get();
+        if (st[0] > 0) { st[1] = 1; return; }   // inside a saved state: reseed after its restore
+        st[1] = 0;
         forge.util.MyRandom.setRandom(new java.util.Random(forkSeed));
         System.out.println("SIMNOTE fork reseed " + forkSeed);
     }
@@ -363,29 +367,64 @@ public final class LearnedHooks {
 
     /**
      * Spell choice of a seat that plays stock ({@link #observesSpellChoice}): collects the approved plays into a copy
-     * of {@code saList} from a saved state, logs/counts them, puts the state back and returns the stock pick. At the
-     * armed fork point the forced decision acts: the collection is redone on the live state (exactly the acting path
-     * of older jars) and the forced candidate is played, then the branch reseed applies.
+     * of {@code saList} from a saved state, logs/counts them, puts the state back and returns the stock pick.
+     * {@code collect} takes the list and the maximum number of approved plays to collect.
+     * <p>
+     * At the armed fork point the record is made the same way (saved state, pilot=fork); the forced candidate then
+     * acts from the restored state along the stock path as far as it goes: position 0 is the plain stock pick, the
+     * pass position plays nothing, position k collects only k+1 approved plays live (the collection is sequential,
+     * so the first k+1 are those of the record) and plays the last. A forced choice equal to the logged one thus
+     * reproduces the parent exactly, and any other choice changes nothing before the fork point. The branch reseed
+     * applies after the forced play is found.
      */
     public static forge.game.spellability.SpellAbility observedSpellChoice(Player ai, List<forge.game.spellability.SpellAbility> saList,
-            java.util.function.Function<List<forge.game.spellability.SpellAbility>, List<forge.game.spellability.SpellAbility>> collect,
+            java.util.function.BiFunction<List<forge.game.spellability.SpellAbility>, Integer, List<forge.game.spellability.SpellAbility>> collect,
             java.util.function.Supplier<forge.game.spellability.SpellAbility> stock) {
-        if (forkPointNext(SPELL_CHOICE, seatNumber(ai))) {
-            boolean any = observing(ai.getGame(), true, () -> !collect.apply(new ArrayList<>(saList)).isEmpty());
-            if (!any) return stock.get();   // no record here: the fork point is a later decision
-            return spellChoice(ai, collect.apply(saList));
+        if (!forkPointNext(SPELL_CHOICE, seatNumber(ai))) {
+            observing(ai.getGame(), true, () -> spellChoice(ai, collect.apply(new ArrayList<>(saList), spellCandidates)));   // the collection sorts its list in place
+            return stock.get();
         }
-        observing(ai.getGame(), true, () -> spellChoice(ai, collect.apply(new ArrayList<>(saList))));   // the collection sorts its list in place
-        return stock.get();
+        final int[] st = SNAPSHOT_DEPTH.get();
+        final List<forge.game.spellability.SpellAbility> seen = new ArrayList<>();
+        final int forced;
+        st[2]++;   // hold the branch reseed until the forced play is found
+        try {
+            LAST_FORCED.set(-2);
+            observing(ai.getGame(), true, () -> {
+                seen.addAll(collect.apply(new ArrayList<>(saList), spellCandidates));
+                return spellChoice(ai, seen);
+            });
+            forced = LAST_FORCED.get();
+        } finally {
+            st[2]--;
+        }
+        forge.game.spellability.SpellAbility sa;
+        if (forced < 0) {
+            sa = stock.get();   // no record here (the fork point is a later decision) or the forced position was invalid
+        } else if (forced == 0) {
+            sa = stock.get();
+        } else if (forced >= seen.size()) {
+            sa = null;   // the pass candidate
+        } else {
+            List<forge.game.spellability.SpellAbility> live = collect.apply(saList, forced + 1);
+            sa = live.size() > forced ? live.get(forced) : null;
+            if (sa != seen.get(forced))
+                System.out.println("SIMNOTE fork warning: live candidate " + forced + " (" + sa + ") differs from the record's (" + seen.get(forced) + ")");
+        }
+        if (forced >= 0) forkReseed();
+        return sa;
     }
+
+    /** The forced position returned by the last {@link #countDecision} on this thread (-1 none, -2 not counted). */
+    private static final ThreadLocal<Integer> LAST_FORCED = ThreadLocal.withInitial(() -> -2);
 
     /** Runs a learn-log record ({@code work}) from a saved state that is put back afterwards: logging never changes play. */
     public static <T> T transparently(Player ai, String hook, java.util.function.Supplier<T> work) {
         return observing(ai.getGame(), LearnLog.enabled(), work);
     }
 
-    /** per thread: [depth of nested saved states, fork reseed pending (1)] */
-    private static final ThreadLocal<int[]> SNAPSHOT_DEPTH = ThreadLocal.withInitial(() -> new int[2]);
+    /** per thread: [depth of nested saved states, fork reseed pending (1), reseed held by the caller (>0)] */
+    private static final ThreadLocal<int[]> SNAPSHOT_DEPTH = ThreadLocal.withInitial(() -> new int[3]);
 
     /**
      * Runs {@code work}; when {@code observe}, the draw state (randomness, id counters, timestamp/card ids, AI card
@@ -402,7 +441,7 @@ public final class LearnedHooks {
         } finally {
             st[0]--;
             restoreDrawState(game, snap);
-            if (st[1] != 0) { st[1] = 0; forkReseed(); }
+            if (st[1] != 0 && st[2] == 0) { st[1] = 0; forkReseed(); }
         }
     }
 
