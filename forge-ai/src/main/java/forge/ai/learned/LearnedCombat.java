@@ -26,11 +26,17 @@ import forge.game.player.Player;
  * replaces the declaration, and restores the stock one if Forge's validation rejects it. One {@code combat_attack}
  * record per declaration (when the learn log is open); the {@code attack_assign} fork forces candidate {@code pos}
  * (0..N-1 = the solver's top-N lines, N = the stock line).
+ * <p>
+ * Shadow mode ({@code shadow}, phase 2c): the stock declaration stands; the solver still runs on the same board and
+ * the record is written with {@code "status":"shadow"}, {@code "pilot":"stock"} and {@code chosen} = the stock
+ * line's position. Nothing in the game changes (the solver and the board builder consume no randomness and touch no
+ * game state). Decisions are counted as in solver mode, so an {@code attack_assign} fork on a shadow seat forces
+ * the solver line at that record (pilot fork) and the game continues from there.
  */
 public final class LearnedCombat {
     private LearnedCombat() {}
 
-    public static final String STOCK = "stock", SOLVER = "solver";
+    public static final String STOCK = "stock", SOLVER = "solver", SHADOW = "shadow";
     /** sim / JVM override of every Learned seat's LEARNED_COMBAT (null = profile) */
     public static volatile String override = System.getProperty("learned.combat");
     private static volatile CardImpact impact;
@@ -62,7 +68,8 @@ public final class LearnedCombat {
         if (!aic.getBoolProperty(AiProps.LEARNED_HOOKS)) return STOCK;
         String o = override;
         String m = o != null && !o.trim().isEmpty() ? o.trim() : aic.getProperty(AiProps.LEARNED_COMBAT);
-        return SOLVER.equalsIgnoreCase(m) ? SOLVER : STOCK;
+        if (SOLVER.equalsIgnoreCase(m)) return SOLVER;
+        return SHADOW.equalsIgnoreCase(m) ? SHADOW : STOCK;
     }
 
     /** per game, per Learned seat: one SIMNOTE line naming the combat mode */
@@ -70,7 +77,7 @@ public final class LearnedCombat {
         String m = mode(aic);
         String src = override != null && !override.trim().isEmpty() ? "override" : "profile";
         StringBuilder sb = new StringBuilder("SIMNOTE learned seat=").append(seat).append(" combat=").append(m).append(" src=").append(src);
-        if (SOLVER.equals(m)) {
+        if (SOLVER.equals(m) || SHADOW.equals(m)) {
             CardImpact imp = impact();
             sb.append(" preset=d22v1 (sum_all floor0 hard, lethal last/safe, strictKill, elimNoSwing, attackRule d22_v1, value d22)");
             sb.append(" impact=").append(imp == null ? "none (proxy value p+t+keywords; protected = commander only)" : imp.id());
@@ -89,7 +96,9 @@ public final class LearnedCombat {
      * is in {@code combat}. No-op unless the seat's combat mode is solver.
      */
     public static void declare(AiController aic, Player ai, Combat combat) {
-        if (!SOLVER.equals(mode(aic))) return;
+        String m = mode(aic);
+        boolean shadow = SHADOW.equals(m);
+        if (!SOLVER.equals(m) && !shadow) return;
         CombatBoard board = CombatBoard.build(ai, combat);
         boolean anyCan = !board.stock.isEmpty();
         for (CombatSolver.Creature c : board.input.seats.get(0).creatures) anyCan |= c.canAttack && !c.tapped;
@@ -120,7 +129,7 @@ public final class LearnedCombat {
         int nTop = res == null ? 0 : res.top.size();
         int nCands = nTop + 1;   // + the stock line
         int forced = LearnedHooks.countDecision(LearnedHooks.ATTACK_ASSIGN, seat, nCands, turn);
-        int chosen = res == null ? nTop : 0;
+        int chosen = res == null || shadow ? nTop : 0;
         if (forced >= 0) chosen = forced;
         List<String> dropped = new ArrayList<>();
         if (chosen < nTop) {
@@ -140,9 +149,10 @@ public final class LearnedCombat {
                 status = "invalid->stock";
             }
         } else if (res != null) {
-            status = forced >= 0 ? "applied" : status;   // the stock line itself (fork pos N): combat already holds it
+            // the stock line itself (fork pos N, or shadow mode): combat already holds it
+            status = forced >= 0 ? "applied" : shadow ? "shadow" : status;
         }
-        if (LearnLog.enabled()) LearnLog.raw("combat_attack", record(ai, board, res, status, chosen, nTop, forced >= 0, micros, dropped, combat, turn));
+        if (LearnLog.enabled()) LearnLog.raw("combat_attack", record(ai, board, res, status, chosen, nTop, forced >= 0 ? "fork" : shadow ? "stock" : "solver", micros, dropped, combat, turn));
         if (forced >= 0) LearnedHooks.forkReseed();
     }
 
@@ -185,11 +195,11 @@ public final class LearnedCombat {
     }
 
     static String record(Player ai, CombatBoard board, CombatSolver.Result res, String status, int chosen, int nTop,
-                         boolean fork, long micros, List<String> dropped, Combat combat, int turn) {
+                         String pilot, long micros, List<String> dropped, Combat combat, int turn) {
         StringBuilder sb = new StringBuilder(4096);
         PhaseType ph = ai.getGame().getPhaseHandler().getPhase();
         sb.append("\"seat\":").append(board.input.actingSeat).append(",\"turn\":").append(turn).append(",\"phase\":").append(ph == null ? 0 : ph.ordinal());
-        sb.append(",\"pilot\":\"").append(fork ? "fork" : "solver").append("\",\"model\":\"solver-d22v1\"");
+        sb.append(",\"pilot\":\"").append(pilot).append("\",\"model\":\"solver-d22v1\"");
         CardImpact imp = impact();
         sb.append(",\"impact\":\"").append(imp == null ? "proxy" : imp.id().replace("\"", "'")).append('"');
         sb.append(",\"status\":\"").append(status).append('"');

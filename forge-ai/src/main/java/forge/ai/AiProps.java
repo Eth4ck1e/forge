@@ -167,7 +167,7 @@ public enum AiProps {
     LEARNED_ATTACK_TARGET("false"),
     LEARNED_SPELL_CHOICE("false"),
     LEARNED_MODEL(""),
-    LEARNED_COMBAT("stock"), // learned-ai D22 phase 2: "solver" = attack declaration by forge.ai.learned.CombatSolver
+    LEARNED_COMBAT("stock"), // learned-ai D22 phase 2: "solver" = attack declaration by forge.ai.learned.CombatSolver; "shadow" = stock plays, solver logged
     // Sampling efficiency and deck-agnostic valuation. Setting PRUNING/CATEGORY_HOLD/ADAPTIVE_PLAYOUT to false and
     // EXTRA_ROUNDS to 0 reproduces the original flat Monte Carlo, which is what the A/B benchmark uses as baseline.
     FLAT_MC_EXTRA_ROUNDS("2"),
