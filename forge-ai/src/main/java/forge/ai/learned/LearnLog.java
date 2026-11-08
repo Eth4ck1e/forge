@@ -77,10 +77,11 @@ public final class LearnLog {
 
     /**
      * One decision. {@code seats} are the absolute seat numbers (1-based, as in SIMRESULT) in relative order;
-     * {@code chosen} / {@code stock} are indices into {@code cands}, which are relative seat indices.
+     * {@code chosen} / {@code stock} are indices into {@code cands}, which are relative seat indices. {@code model}
+     * (schema 3, D36) is the id of the model that piloted the seat for this hook, or "stock".
      */
     public static synchronized void decision(String hook, int actingSeat, int turn, int phase, int[] seats, int[] cands,
-                                             int chosen, int stock, String pilot, float[] x, float[][] xa) {
+                                             int chosen, int stock, String pilot, String model, float[] x, float[][] xa) {
         if (out == null) return;
         StringBuilder sb = new StringBuilder(8192);
         sb.append("{\"v\":").append(Features.SCHEMA).append(",\"hook\":\"").append(hook).append('"');
@@ -89,6 +90,7 @@ public final class LearnLog {
         sb.append(",\"seats\":"); ints(sb, seats);
         sb.append(",\"cands\":"); ints(sb, cands);
         sb.append(",\"chosen\":").append(chosen).append(",\"stock\":").append(stock).append(",\"pilot\":\"").append(pilot).append('"');
+        sb.append(",\"model\":\"").append(model == null ? "stock" : model.replace("\\", "\\\\").replace("\"", "\\\"")).append('"');   // D36 (schema 3)
         sb.append(",\"x\":"); floats(sb, x);
         sb.append(",\"xa\":[");
         for (int i = 0; i < xa.length; i++) { if (i > 0) sb.append(','); floats(sb, xa[i]); }

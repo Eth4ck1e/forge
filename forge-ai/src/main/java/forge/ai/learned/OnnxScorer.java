@@ -18,10 +18,12 @@ public final class OnnxScorer implements LearnedHooks.Scorer {
     private final OrtEnvironment env;
     private final OrtSession session;
     private final String path;
+    private final String id;
     private long calls, nanos;
 
     public OnnxScorer(String modelPath) throws OrtException {
         path = modelPath;
+        id = idOf(modelPath);
         env = OrtEnvironment.getEnvironment();
         OrtSession.SessionOptions opts = new OrtSession.SessionOptions();
         opts.setIntraOpNumThreads(1);   // sim workers already saturate the cores; the model is tiny
@@ -59,4 +61,20 @@ public final class OnnxScorer implements LearnedHooks.Scorer {
     public double meanMicros() { return calls == 0 ? 0 : nanos / 1000.0 / calls; }
     public long calls() { return calls; }
     public String path() { return path; }
+    /** D36: "file.onnx#<first 8 hex of sha256>": names the model in decision records and SIMNOTE / SIMMODEL lines. */
+    @Override
+    public String id() { return id; }
+
+    static String idOf(String modelPath) {
+        java.io.File f = new java.io.File(modelPath);
+        try {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] h = md.digest(java.nio.file.Files.readAllBytes(f.toPath()));
+            StringBuilder sb = new StringBuilder(f.getName()).append('#');
+            for (int i = 0; i < 4; i++) sb.append(String.format("%02x", h[i]));
+            return sb.toString();
+        } catch (Exception e) {
+            return f.getName();
+        }
+    }
 }

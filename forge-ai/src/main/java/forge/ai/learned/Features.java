@@ -23,7 +23,7 @@ import forge.game.zone.ZoneType;
  * Card identity enters only through types, keywords and costs in v0; a role map is a later schema version.
  */
 public final class Features {
-    public static final int SCHEMA = 2;
+    public static final int SCHEMA = 3;   // 3 (D36): decision records carry "model"
     public static final int SEATS = 4;
     /** Creature slots per seat, best first by power. */
     public static final int CREATURE_SLOTS = 6;

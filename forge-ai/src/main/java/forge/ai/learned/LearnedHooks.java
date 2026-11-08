@@ -29,9 +29,26 @@ public final class LearnedHooks {
     /** Scores (state, candidate) pairs; null until a model is loaded (M3). */
     public interface Scorer {
         float[] score(float[] x, float[][] xa);
+        /** D36: the id written into each decision record's {@code model} field (ONNX: file name + short hash). */
+        default String id() { return "custom"; }
     }
 
+    /** D36: a scorer with a fixed id (e.g. the {@code random} diagnostic). */
+    public static Scorer named(final String id, final Scorer s) {
+        return new Scorer() {
+            @Override public float[] score(float[] x, float[][] xa) { return s.score(x, xa); }
+            @Override public String id() { return id; }
+        };
+    }
+
+    /** Unprefixed {@code -model hook=path}: every Learned seat (hook -> scorer). */
     private static final java.util.concurrent.ConcurrentHashMap<String, Scorer> SCORERS = new java.util.concurrent.ConcurrentHashMap<>();
+    /** D36: {@code -model seatN:hook=path}: seat N only (1-based, SIMRESULT order); overrides the unprefixed table. */
+    private static final java.util.concurrent.ConcurrentHashMap<Integer, java.util.Map<String, Scorer>> SEAT_SCORERS = new java.util.concurrent.ConcurrentHashMap<>();
+    /** D36: profile LEARNED_MODEL scorers per seat (seat -> hook -> scorer), filled at seat creation, cleared per game. */
+    private static final java.util.concurrent.ConcurrentHashMap<Integer, java.util.Map<String, Scorer>> PROFILE_SCORERS = new java.util.concurrent.ConcurrentHashMap<>();
+    /** D36: every ONNX model loaded in this JVM, by canonical path (CLI and profile share it); one session per file. */
+    private static final java.util.Map<String, OnnxScorer> MODEL_CACHE = new java.util.LinkedHashMap<>();
     /**
      * Exploration for data generation (M4 off-policy fix): with this probability a stock-piloted seat attacks a
      * uniformly random candidate instead of the stock rule's pick, and the record is logged with pilot "explore" and
@@ -116,6 +133,46 @@ public final class LearnedHooks {
 
     public static void setScorer(String hook, Scorer s) { if (s == null) SCORERS.remove(hook); else SCORERS.put(hook, s); }
     public static Scorer scorer(String hook) { return SCORERS.get(hook); }
+    /** D36: seat-specific scorer ({@code -model seatN:hook=...}); null removes it. */
+    public static void setSeatScorer(int seat, String hook, Scorer s) {
+        java.util.Map<String, Scorer> m = SEAT_SCORERS.computeIfAbsent(seat, k -> new java.util.concurrent.ConcurrentHashMap<>());
+        if (s == null) m.remove(hook); else m.put(hook, s);
+    }
+    /** D36: drops every CLI and profile scorer (tests; the model cache stays). */
+    public static synchronized void clearScorers() {
+        SCORERS.clear(); SEAT_SCORERS.clear(); PROFILE_SCORERS.clear();
+    }
+
+    /** D36: loads (or reuses) the ONNX model at {@code path}; one session per canonical path for the whole JVM. */
+    public static synchronized OnnxScorer loadModel(String path) throws Exception {
+        String key = canonical(new java.io.File(path));
+        OnnxScorer s = MODEL_CACHE.get(key);
+        if (s == null) {
+            s = new OnnxScorer(key);
+            MODEL_CACHE.put(key, s);
+        }
+        return s;
+    }
+
+    /** D36: the loaded ONNX models (SIMMODEL reports one entry per model). */
+    public static synchronized List<OnnxScorer> loadedModels() { return new ArrayList<>(MODEL_CACHE.values()); }
+
+    /**
+     * D36: the scorer seat {@code seat} uses for {@code hook}: {@code -model seatN:} first, then unprefixed
+     * {@code -model}, then the seat's own profile LEARNED_MODEL. Null when none (the seat plays stock).
+     */
+    public static Scorer scorerFor(int seat, String hook) {
+        java.util.Map<String, Scorer> m = SEAT_SCORERS.get(seat);
+        Scorer s = m == null ? null : m.get(hook);
+        if (s != null) return s;
+        s = SCORERS.get(hook);
+        if (s != null) return s;
+        m = PROFILE_SCORERS.get(seat);
+        return m == null ? null : m.get(hook);
+    }
+
+    /** D36: the {@code model} field of a decision record: the id of the model that piloted it, else "stock". */
+    private static String modelId(boolean learned, Scorer s) { return learned && s != null ? s.id() : "stock"; }
 
     public static void beginDeclare(Player ai) { DECLARING.set(ai); }
     public static void endDeclare() { DECLARING.remove(); }
@@ -124,7 +181,7 @@ public final class LearnedHooks {
         if (!(ai.getController() instanceof PlayerControllerAi)) return false;
         AiController aic = ((PlayerControllerAi) ai.getController()).getAi();
         if (!aic.getBoolProperty(AiProps.LEARNED_HOOKS) || !aic.getBoolProperty(prop)) return false;
-        ensureModelsLoaded(aic);
+        ensureModelsLoaded(aic, seatNumber(ai), false);
         return true;
     }
 
@@ -135,14 +192,20 @@ public final class LearnedHooks {
     public static void prepareSeat(Player ai) {
         if (!(ai.getController() instanceof PlayerControllerAi)) return;
         AiController aic = ((PlayerControllerAi) ai.getController()).getAi();
-        if (!aic.getBoolProperty(AiProps.LEARNED_HOOKS)) return;
-        ensureModelsLoaded(aic);
+        // the seat is created before it is registered with the game: its seat number is the next registration slot
+        int seat = ai.getGame().getRegisteredPlayers().indexOf(ai) + 1;
+        if (seat <= 0) seat = ai.getGame().getRegisteredPlayers().size() + 1;
+        if (!aic.getBoolProperty(AiProps.LEARNED_HOOKS)) {
+            java.util.Map<String, Scorer> m = SEAT_SCORERS.get(seat);
+            if (m != null && !m.isEmpty())
+                System.out.println("SIMNOTE learned seat=" + seat + " has -model " + m.keySet() + " but its profile has LEARNED_HOOKS off; seat plays stock");
+            return;
+        }
+        ensureModelsLoaded(aic, seat, true);
     }
 
-    private static volatile boolean profileModelsTried = false;
-    // D20: scorers loaded from the profile (hook -> path) and the loaded models by path, so a per-game reset is cheap
-    private static final java.util.Map<String, String> PROFILE_LOADED = new java.util.HashMap<>();
-    private static final java.util.Map<String, Scorer> PROFILE_MODEL_CACHE = new java.util.HashMap<>();
+    /** D36: seats whose profile models were looked up this game (the lookup happens once per seat per game). */
+    private static final java.util.Set<Integer> PROFILE_TRIED = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     /**
      * D20: puts the profile-model state back to how a fresh process starts a game (nothing loaded), so game k of a
@@ -150,9 +213,8 @@ public final class LearnedHooks {
      * seats are created ({@link #prepareSeat}), before any decision; the ONNX sessions stay cached by path.
      */
     public static synchronized void resetProfileModels() {
-        for (String hook : PROFILE_LOADED.keySet()) SCORERS.remove(hook);
-        PROFILE_LOADED.clear();
-        profileModelsTried = false;
+        PROFILE_SCORERS.clear();
+        PROFILE_TRIED.clear();
     }
 
     /**
@@ -160,34 +222,46 @@ public final class LearnedHooks {
      * ("spell_choice=learned/spell_choice.onnx;attack_target=..."), paths relative to the AI profile folder
      * (res/ai) unless absolute. Done when a Learned seat is created ({@link #prepareSeat}), with the hooked decisions as a fallback.
      */
-    private static void ensureModelsLoaded(AiController aic) {
-        if (profileModelsTried) return;
+    private static void ensureModelsLoaded(AiController aic, int seat, boolean announce) {
+        if (seat <= 0 || PROFILE_TRIED.contains(seat)) return;
         synchronized (LearnedHooks.class) {
-            if (profileModelsTried) return;
-            profileModelsTried = true;
+            if (!PROFILE_TRIED.add(seat)) return;
+            java.util.Map<String, Scorer> mine = new java.util.concurrent.ConcurrentHashMap<>();
             String spec = aic.getProperty(AiProps.LEARNED_MODEL);
-            if (spec == null || spec.trim().isEmpty()) return;
-            for (String part : spec.split(";")) {
+            if (spec != null) for (String part : spec.split(";")) {
                 int eq = part.indexOf('=');
                 if (eq < 0) continue;
                 String hook = part.substring(0, eq).trim(); String path = part.substring(eq + 1).trim();
-                if (SCORERS.containsKey(hook)) continue;   // -model on the command line wins
+                if (scorerFor(seat, hook) != null) continue;   // -model on the command line wins (seat-prefixed or not)
                 java.io.File f = new java.io.File(path);
                 if (!f.isAbsolute() && forge.ai.AiProfileUtil.getProfileDir() != null) f = new java.io.File(forge.ai.AiProfileUtil.getProfileDir(), path);
                 try {
-                    Scorer cached = PROFILE_MODEL_CACHE.get(f.getPath());
-                    if (cached == null) {
-                        cached = new OnnxScorer(f.getPath());
-                        PROFILE_MODEL_CACHE.put(f.getPath(), cached);
-                        System.out.println("learned-ai: loaded " + hook + " model " + f.getPath());
-                    }
-                    SCORERS.put(hook, cached);
-                    PROFILE_LOADED.put(hook, f.getPath());
+                    boolean fresh = !MODEL_CACHE.containsKey(canonical(f));
+                    OnnxScorer sc = loadModel(f.getPath());
+                    if (fresh) System.out.println("learned-ai: loaded " + hook + " model " + sc.path() + " (" + sc.id() + ")");
+                    mine.put(hook, sc);
                 } catch (Exception e) {
                     System.err.println("learned-ai: could not load " + hook + " model " + f.getPath() + ": " + e);
                 }
             }
+            PROFILE_SCORERS.put(seat, mine);
+            if (announce) {
+                // D36: one line per seat per hooked model at game start, naming where the model came from
+                for (String hook : new String[] {SPELL_CHOICE, ATTACK_TARGET}) {
+                    Scorer sc = scorerFor(seat, hook);
+                    if (sc == null) continue;
+                    java.util.Map<String, Scorer> sm = SEAT_SCORERS.get(seat);
+                    String src = sm != null && sm.get(hook) == sc ? "seat" : SCORERS.get(hook) == sc ? "global" : "profile";
+                    AiProps prop = SPELL_CHOICE.equals(hook) ? AiProps.LEARNED_SPELL_CHOICE : AiProps.LEARNED_ATTACK_TARGET;
+                    System.out.println("SIMNOTE learned seat=" + seat + " hook=" + hook + " model=" + sc.id() + " src=" + src
+                            + (aic.getBoolProperty(prop) ? "" : " (hook off in profile; seat plays stock)"));
+                }
+            }
         }
+    }
+
+    private static String canonical(java.io.File f) {
+        try { return f.getCanonicalPath(); } catch (java.io.IOException e) { return f.getAbsolutePath(); }
     }
 
     /**
@@ -198,7 +272,7 @@ public final class LearnedHooks {
     public static Player attackTarget(Player ai, List<Player> opponents, Map<Player, Integer> threat, Player stock) {
         boolean declaring = DECLARING.get() == ai;
         boolean on = hookOn(ai, AiProps.LEARNED_ATTACK_TARGET);   // loads profile models if not yet loaded
-        Scorer scorer = SCORERS.get(ATTACK_TARGET);
+        Scorer scorer = scorerFor(seatNumber(ai), ATTACK_TARGET);   // D36: per seat
         boolean learned = on && scorer != null;
         final double er = exploreRate(ATTACK_TARGET);
         boolean explore = declaring && !learned && er > 0 && forge.util.MyRandom.getRandom().nextDouble() < er;
@@ -232,7 +306,7 @@ public final class LearnedHooks {
             for (int i = 0; i < seats.size(); i++) abs[i] = seatNumber(seats.get(i));
             PhaseType ph = ai.getGame().getPhaseHandler().getPhase();
             LearnLog.decision(ATTACK_TARGET, seatNumber(ai), ai.getGame().getPhaseHandler().getTurn(), ph == null ? 0 : ph.ordinal(),
-                    abs, cands, chosen, stockIdx, forced >= 0 ? "fork" : learned ? "learned" : (explore ? "explore" : "stock"), x, xa);
+                    abs, cands, chosen, stockIdx, forced >= 0 ? "fork" : learned ? "learned" : (explore ? "explore" : "stock"), modelId(learned, scorer), x, xa);
         }
         if (forced >= 0) forkReseed();
         return (learned || explore || forced >= 0) && chosen >= 0 ? opponents.get(chosen) : null;
@@ -240,7 +314,7 @@ public final class LearnedHooks {
 
     /** Whether the spell-choice hook needs the list of approved plays (logging, exploration or a loaded model). */
     public static boolean spellChoiceActive(Player ai) {
-        return LearnLog.enabled() || forkConfigured || exploreRate(SPELL_CHOICE) > 0 || (hookOn(ai, AiProps.LEARNED_SPELL_CHOICE) && SCORERS.get(SPELL_CHOICE) != null);
+        return LearnLog.enabled() || forkConfigured || exploreRate(SPELL_CHOICE) > 0 || (hookOn(ai, AiProps.LEARNED_SPELL_CHOICE) && scorerFor(seatNumber(ai), SPELL_CHOICE) != null);
     }
 
     /**
@@ -250,7 +324,7 @@ public final class LearnedHooks {
     public static forge.game.spellability.SpellAbility spellChoice(Player ai, List<forge.game.spellability.SpellAbility> approved) {
         if (approved.isEmpty()) return null;   // nothing playable: pass, nothing to decide
         boolean on = hookOn(ai, AiProps.LEARNED_SPELL_CHOICE);   // loads profile models if not yet loaded
-        Scorer scorer = SCORERS.get(SPELL_CHOICE);
+        Scorer scorer = scorerFor(seatNumber(ai), SPELL_CHOICE);   // D36: per seat
         boolean learned = on && scorer != null;
         final double er = exploreRate(SPELL_CHOICE);
         boolean explore = !learned && er > 0 && forge.util.MyRandom.getRandom().nextDouble() < er;
@@ -280,7 +354,7 @@ public final class LearnedHooks {
             for (int i = 0; i < seats.size(); i++) abs[i] = seatNumber(seats.get(i));
             PhaseType ph = ai.getGame().getPhaseHandler().getPhase();
             LearnLog.decision(SPELL_CHOICE, seatNumber(ai), ai.getGame().getPhaseHandler().getTurn(), ph == null ? 0 : ph.ordinal(),
-                    abs, cands, chosen, 0, forced >= 0 ? "fork" : learned ? "learned" : (explore ? "explore" : "stock"), x, xa);
+                    abs, cands, chosen, 0, forced >= 0 ? "fork" : learned ? "learned" : (explore ? "explore" : "stock"), modelId(learned, scorer), x, xa);
         }
         if (forced >= 0) forkReseed();
         return chosen == n - 1 ? null : approved.get(chosen);

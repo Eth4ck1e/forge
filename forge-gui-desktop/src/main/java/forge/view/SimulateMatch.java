@@ -65,7 +65,12 @@ public class SimulateMatch {
                 }
 
                 options = new ArrayList<>();
-                params.put(a.substring(1), options);
+                final List<String> prev = "-model".equals(a) ? params.get("model") : null;   // learned-ai D36: repeated -model flags merge
+                if (prev != null) {
+                    options = prev;
+                } else {
+                    params.put(a.substring(1), options);
+                }
             } else if (options != null) {
                 options.add(a);
             } else {
@@ -245,23 +250,39 @@ public class SimulateMatch {
         }
         if (params.containsKey("model")) {
             try {
-                for (final String spec : params.get("model")) {
-                    // "<hook>=<path>" or "<hook>=random"; a bare path means attack_target (the first hook)
+                for (String spec : params.get("model")) {
+                    // "[seat<N>:]<hook>=<path>" or "[seat<N>:]<hook>=random"; a bare path means attack_target (the first hook).
+                    // learned-ai D36: a seat<N>: prefix gives that seat (1-based, SIMRESULT order) its own model; it still
+                    // needs a Learned-type profile in -a. Unprefixed specs serve every Learned seat without a seat model.
+                    int seatN = 0;
+                    final java.util.regex.Matcher sm = java.util.regex.Pattern.compile("^seat(\\d+):(.*)$").matcher(spec);
+                    if (sm.matches()) {
+                        seatN = Integer.parseInt(sm.group(1));
+                        spec = sm.group(2);
+                        if (seatN < 1) {
+                            throw new IllegalArgumentException("seat numbers start at 1: " + spec);
+                        }
+                    }
                     final int eq = spec.indexOf('=');
                     final String hook = eq < 0 ? forge.ai.learned.LearnedHooks.ATTACK_TARGET : spec.substring(0, eq);
                     final String modelPath = eq < 0 ? spec : spec.substring(eq + 1);
+                    final forge.ai.learned.LearnedHooks.Scorer sc;
                     if ("random".equals(modelPath)) {
                         // diagnostic: Learned seats pick a uniformly random candidate (calibrates offline policy evaluation)
-                        forge.ai.learned.LearnedHooks.setScorer(hook, (x, xa) -> {
+                        sc = forge.ai.learned.LearnedHooks.named("random", (x, xa) -> {
                             final float[] r = new float[xa.length];
                             for (int k = 0; k < r.length; k++) r[k] = forge.util.MyRandom.getRandom().nextFloat();
                             return r;
                         });
-                        System.out.println("SIMNOTE learned model " + hook + " random");
                     } else {
-                        learnedScorer = new forge.ai.learned.OnnxScorer(modelPath);
-                        forge.ai.learned.LearnedHooks.setScorer(hook, learnedScorer);
-                        System.out.println("SIMNOTE learned model " + hook + " " + modelPath);
+                        sc = forge.ai.learned.LearnedHooks.loadModel(modelPath);
+                    }
+                    if (seatN > 0) {
+                        forge.ai.learned.LearnedHooks.setSeatScorer(seatN, hook, sc);
+                        System.out.println("SIMNOTE learned model seat" + seatN + " " + hook + " " + ("random".equals(modelPath) ? "random" : modelPath) + " " + sc.id());
+                    } else {
+                        forge.ai.learned.LearnedHooks.setScorer(hook, sc);
+                        System.out.println("SIMNOTE learned model " + hook + " " + ("random".equals(modelPath) ? "random" : modelPath) + " " + sc.id());
                     }
                 }
             } catch (Exception e) {
@@ -402,8 +423,6 @@ public class SimulateMatch {
      * learned-ai: one machine-readable line per finished game, for the evaluation harness. Everything here is read
      * from the finished Game object; nothing in the game is changed.
      */
-    private static forge.ai.learned.OnnxScorer learnedScorer = null;
-
     private static String simResultLine(final Game g, final int iGame, final long durationMs, final int exceptions) {
         final StringBuilder sb = new StringBuilder("SIMRESULT {");
         sb.append("\"game\":").append(iGame + 1);
@@ -514,8 +533,20 @@ public class SimulateMatch {
         }
         forge.ai.learned.LearnedHooks.forkGameEnd();   // learned-ai D20
         forge.ai.learned.LearnLog.endGame();
-        if (learnedScorer != null) {
-            System.out.printf("SIMMODEL {\"calls\":%d,\"meanMicros\":%.1f}%n", learnedScorer.calls(), learnedScorer.meanMicros());
+        // learned-ai D36: totals as before (cumulative per process), plus one entry per loaded model
+        final List<forge.ai.learned.OnnxScorer> models = forge.ai.learned.LearnedHooks.loadedModels();
+        if (!models.isEmpty()) {
+            long calls = 0;
+            double micros = 0;
+            final StringBuilder per = new StringBuilder();
+            for (final forge.ai.learned.OnnxScorer m : models) {
+                calls += m.calls();
+                micros += m.meanMicros() * m.calls();
+                per.append(per.length() == 0 ? "" : ",").append(String.format(java.util.Locale.ROOT,
+                        "{\"id\":%s,\"calls\":%d,\"meanMicros\":%.1f}", jsonStr(m.id()), m.calls(), m.meanMicros()));
+            }
+            System.out.println(String.format(java.util.Locale.ROOT, "SIMMODEL {\"calls\":%d,\"meanMicros\":%.1f,\"models\":[%s]}",
+                    calls, calls == 0 ? 0.0 : micros / calls, per));
         }
         System.out.flush();
         if (timedOut && exitOnTimeout) {
