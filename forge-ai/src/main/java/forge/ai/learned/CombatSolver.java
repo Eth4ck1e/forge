@@ -91,6 +91,10 @@ public final class CombatSolver {
         /** trade test: the defender's protected blockers (its commander, top-decile impact) never count below their
          * proxy value, i.e. a below-median card-impact term does not discount them */
         public boolean protectedBlockerFloor = true;
+        /** lethal exemption: protected groups also keep their unfiltered options with more than one opponent left when
+         * every opponent could die together (Python protected_kill_all; necessary condition, see Ctx.killAllPossible).
+         * admissible() still lets a protected breaker through only on a line that eliminates every opponent. */
+        public boolean protectedKillAll = true;
 
         /** D22 preset (same as new Config()) */
         public static Config d22() { return new Config(); }
@@ -106,7 +110,7 @@ public final class CombatSolver {
         /** Python preset('d22_v1') of d9230e6: as d22() but lethal on the last opponent only (lethal_last) */
         public static Config pythonD22v1() {
             Config c = new Config();
-            c.lethalScope = LethalScope.LAST;
+            c.lethalScope = LethalScope.LAST; c.protectedKillAll = false;
             return c;
         }
     }
@@ -680,6 +684,7 @@ public final class CombatSolver {
                 // opponent could die this combat, groups keep their unfiltered options (protected groups only with one
                 // opponent left) and solve() drops the lines that break the rule without a kill that excuses it.
                 lethalExempt = P.lethalExempt && P.lethalScope != LethalScope.OFF && killPossible();
+                boolean killAll = lethalExempt && P.protectedKillAll && killAllPossible();
                 for (int gi = 0; gi < groups.size(); gi++) {
                     if (fixedT[gi] >= 0) continue;
                     Unit u0 = groups.get(gi).get(0);
@@ -689,7 +694,7 @@ public final class CombatSolver {
                     for (int t = 0; t < T; t++) { vs[t] = attackEligible(u0, oppBlk.get(targets.get(t).seat), P); ok[t] = vs[t].startsWith("ok"); }
                     verdict[gi] = vs;
                     allowed[gi] = ok;
-                    if (lethalExempt && (!u0.prot || opps.size() == 1)) continue;
+                    if (lethalExempt && (!u0.prot || opps.size() == 1 || killAll)) continue;
                     List<int[]> keep = new ArrayList<>();
                     for (int[] v : options.get(gi)) {
                         boolean good = true;
@@ -714,6 +719,23 @@ public final class CombatSolver {
             for (Seat s : opps)
                 if (dmg >= s.life || s.poison + inf >= 10 || (cmd > 0 && s.cmdDmgFromActing + cmd >= 21)) return true;
             return false;
+        }
+
+        /** could every living opponent die together (Python _kill_possible()[1]): one opponent left, or the total
+         * potential covers what each opponent needs (life; 10 - poison with infect; 21 - commander damage with a
+         * commander). A necessary condition only; admissible() checks the actual line. Call after killPossible(). */
+        private boolean killAllPossible() {
+            if (opps.size() == 1) return true;
+            int dmg = 0, inf = 0, cmd = 0;
+            for (Unit u : eligible) { int p = u.potential(); if (u.inf) inf += p; else dmg += p; if (u.cmd) cmd += p; }
+            long need = 0;
+            for (Seat s : opps) {
+                int n = s.life;
+                if (inf > 0) n = Math.min(n, 10 - s.poison);
+                if (cmd > 0) n = Math.min(n, 21 - s.cmdDmgFromActing);
+                need += n;
+            }
+            return dmg + inf >= need;
         }
 
         /** the lethal exemption: a line that breaks the attack rule is kept only if every rule-breaking attacker

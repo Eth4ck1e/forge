@@ -9,11 +9,15 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
+import java.util.TreeSet;
 import java.util.zip.GZIPInputStream;
 
 import org.testng.AssertJUnit;
 import org.testng.annotations.Test;
 
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -31,10 +35,16 @@ public class CombatSolverParityTest {
 
     static final class Row { String src; JsonObject rec, py; CombatSolver.Input in; }
 
-    static List<Row> load() throws Exception {
+    /** learned-ai D22: Python preset('d22_v1') aligned with Java d22() (py-data 2026-11-08 d, fork beb06b2305a);
+     * no card-impact table (the rec carries no card names), so Config.d22() with impact null */
+    private static final String FIXTURE_D22 = "/forge/ai/learned/combat_solver_parity-d22v1.jsonl.gz";
+
+    static List<Row> load() throws Exception { return load(FIXTURE); }
+
+    static List<Row> load(String fixture) throws Exception {
         List<Row> rows = new ArrayList<>();
-        try (InputStream raw = CombatSolverParityTest.class.getResourceAsStream(FIXTURE)) {
-            AssertJUnit.assertNotNull("fixture " + FIXTURE, raw);
+        try (InputStream raw = CombatSolverParityTest.class.getResourceAsStream(fixture)) {
+            AssertJUnit.assertNotNull("fixture " + fixture, raw);
             BufferedReader r = new BufferedReader(new InputStreamReader(new GZIPInputStream(raw), StandardCharsets.UTF_8));
             for (String line; (line = r.readLine()) != null; ) {
                 if (line.isEmpty()) continue;
@@ -118,6 +128,128 @@ public class CombatSolverParityTest {
                 match, rows.size(), modeMatch, fbMatch, rankMatch, s[s.length / 2] / 1e3, s[(int) Math.min(s.length - 1, Math.ceil(s.length * 0.99) - 1)] / 1e3, s[s.length - 1] / 1e3);
         for (String m : bad) System.out.println("  mismatch " + m);
         AssertJUnit.assertEquals("assignments matching the Python solver", rows.size(), match);
+    }
+
+    static String where(Row x) { return x.src + " g" + x.rec.get("game") + " t" + x.rec.get("turn") + " seat " + x.rec.get("seat"); }
+
+    static Set<String> idSet(JsonArray a) {
+        Set<String> out = new TreeSet<>();
+        for (JsonElement e : a) out.add(e.getAsString());
+        return out;
+    }
+
+    static Set<String> idSet(java.util.Collection<Integer> c) {
+        Set<String> out = new TreeSet<>();
+        for (Integer i : c) out.add(i.toString());
+        return out;
+    }
+
+    /** Java verdicts in the fixture's shape {id: {defender: verdict}} */
+    static Map<String, Map<String, String>> elig(CombatSolver.Result r) {
+        Map<String, Map<String, String>> m = new TreeMap<>();
+        for (Map.Entry<Integer, String[]> e : r.elig.entrySet()) {
+            Map<String, String> d = new TreeMap<>();
+            for (int t = 0; t < e.getValue().length; t++) d.put(r.targets.get(t).toString(), e.getValue()[t]);
+            m.put(e.getKey().toString(), d);
+        }
+        return m;
+    }
+
+    static Map<String, Map<String, String>> elig(JsonObject py) {
+        Map<String, Map<String, String>> m = new TreeMap<>();
+        for (Map.Entry<String, JsonElement> e : py.getAsJsonObject("elig").entrySet()) {
+            Map<String, String> d = new TreeMap<>();
+            for (Map.Entry<String, JsonElement> v : e.getValue().getAsJsonObject().entrySet()) d.put(v.getKey(), v.getValue().getAsString());
+            m.put(e.getKey(), d);
+        }
+        return m;
+    }
+
+    static boolean close(JsonArray a, List<Double> b) {
+        if (a.size() != b.size()) return false;
+        for (int i = 0; i < a.size(); i++) if (Math.abs(a.get(i).getAsDouble() - b.get(i)) > 1e-6) return false;
+        return true;
+    }
+
+    static boolean close(JsonArray a, double[] b) {
+        if (a.size() != b.length) return false;
+        for (int i = 0; i < a.size(); i++) if (Math.abs(a.get(i).getAsDouble() - b[i]) > 1e-6) return false;
+        return true;
+    }
+
+    /** the D22 preset (Config.d22()) against Python preset('d22_v1') on every field the fixture carries; the
+     * decision fields (line, mode, fallback, lethal, rank, verdicts, exempt, protected) must all match */
+    @Test
+    public void matchesPythonD22v1Preset() throws Exception {
+        List<Row> rows = load(FIXTURE_D22);
+        AssertJUnit.assertTrue("d22v1 fixture has >= 300 snapshots", rows.size() >= 300);
+        String[] fields = {"chosen", "mode", "fallback", "lethal", "rank", "threat", "n_eval", "n_feasible", "key",
+                "elig", "exempt", "protected", "value", "top"};
+        Map<String, Integer> ok = new LinkedHashMap<>();
+        Map<String, String> example = new LinkedHashMap<>();
+        for (String f : fields) ok.put(f, 0);
+        for (Row x : rows) {
+            CombatSolver.Result r = CombatSolver.solve(x.in, CombatSolver.Config.d22());
+            JsonObject py = x.py;
+            Map<String, String> want = expected(py), got = actual(r);
+            List<Integer> rank = new ArrayList<>();
+            for (JsonElement e : py.getAsJsonArray("rank")) rank.add(e.getAsInt());
+            Map<String, Double> wantVal = new TreeMap<>(), gotVal = new TreeMap<>();
+            for (Map.Entry<String, JsonElement> e : py.getAsJsonObject("value").entrySet()) wantVal.put(e.getKey(), e.getValue().getAsDouble());
+            for (Map.Entry<Integer, Double> e : r.value.entrySet()) gotVal.put(e.getKey().toString(), e.getValue());
+            boolean valOk = wantVal.keySet().equals(gotVal.keySet());
+            if (valOk) for (String k : wantVal.keySet()) if (Math.abs(wantVal.get(k) - gotVal.get(k)) > 1e-6) valOk = false;
+            List<Map<String, String>> wantTop = new ArrayList<>(), gotTop = new ArrayList<>();
+            for (JsonElement e : py.getAsJsonArray("top")) {
+                Map<String, String> m = new LinkedHashMap<>();
+                for (Map.Entry<String, JsonElement> a : e.getAsJsonObject().getAsJsonObject("chosen").entrySet()) m.put(a.getKey(), a.getValue().getAsString());
+                wantTop.add(m);
+            }
+            for (CombatSolver.Line l : r.top) {
+                Map<String, String> m = new LinkedHashMap<>();
+                for (Map.Entry<Integer, CombatSolver.Target> a : l.attacks.entrySet()) m.put(a.getKey().toString(), a.getValue().toString());
+                gotTop.add(m);
+            }
+            Map<String, Object[]> cmp = new LinkedHashMap<>();
+            cmp.put("chosen", new Object[]{want.equals(got), want, got});
+            cmp.put("mode", new Object[]{py.get("mode").getAsString().equals(r.mode), py.get("mode").getAsString(), r.mode});
+            cmp.put("fallback", new Object[]{py.get("fallback").getAsBoolean() == r.fallback, py.get("fallback"), r.fallback});
+            cmp.put("lethal", new Object[]{py.get("lethal").getAsBoolean() == r.lethalOverride, py.get("lethal"), r.lethalOverride});
+            cmp.put("rank", new Object[]{rank.equals(r.threatRank), rank, r.threatRank});
+            cmp.put("threat", new Object[]{close(py.getAsJsonArray("threat"), r.threatValue), py.get("threat"), r.threatValue});
+            cmp.put("n_eval", new Object[]{py.get("n_eval").getAsInt() == r.nEval, py.get("n_eval"), r.nEval});
+            cmp.put("n_feasible", new Object[]{py.get("n_feasible").getAsInt() == r.nFeasible, py.get("n_feasible"), r.nFeasible});
+            cmp.put("key", new Object[]{close(py.getAsJsonArray("key"), r.top.get(0).key), py.get("key"), Arrays.toString(r.top.get(0).key)});
+            Map<String, Map<String, String>> we = elig(py), ge = elig(r);
+            cmp.put("elig", new Object[]{we.equals(ge), we, ge});
+            Set<String> wx = idSet(py.getAsJsonArray("exempt")), gx = idSet(r.exempt);
+            cmp.put("exempt", new Object[]{wx.equals(gx), wx, gx});
+            Set<String> wp = idSet(py.getAsJsonArray("protected")), gp = idSet(r.protectedIds);
+            cmp.put("protected", new Object[]{wp.equals(gp), wp, gp});
+            cmp.put("value", new Object[]{valOk, wantVal, gotVal});
+            cmp.put("top", new Object[]{wantTop.equals(gotTop), wantTop, gotTop});
+            for (Map.Entry<String, Object[]> e : cmp.entrySet()) {
+                Object[] v = e.getValue();
+                if ((Boolean) v[0]) ok.merge(e.getKey(), 1, Integer::sum);
+                else example.putIfAbsent(e.getKey(), where(x) + ": py " + v[1] + " java " + v[2]
+                        + " (mode " + r.mode + ", lethal " + r.lethalOverride + ")");
+            }
+        }
+        StringBuilder sb = new StringBuilder("CombatSolver d22v1 parity (" + rows.size() + " rows):");
+        for (String f : fields) sb.append(' ').append(f).append(' ').append(ok.get(f));
+        System.out.println(sb);
+        for (Map.Entry<String, String> e : example.entrySet()) System.out.println("  mismatch " + e.getKey() + ": " + e.getValue());
+        int kaLine = 0, kaMode = 0;   // what protectedKillAll changes on this fixture (py-data: 4 lines, 6 modes)
+        for (Row x : rows) {
+            CombatSolver.Config c = CombatSolver.Config.d22(); c.protectedKillAll = false;
+            CombatSolver.Result a = CombatSolver.solve(x.in, CombatSolver.Config.d22()), b = CombatSolver.solve(x.in, c);
+            if (!actual(a).equals(actual(b))) kaLine++;
+            if (!a.mode.equals(b.mode)) kaMode++;
+        }
+        System.out.printf("CombatSolver protectedKillAll off: %d lines and %d modes differ from d22()%n", kaLine, kaMode);
+        AssertJUnit.assertTrue("protectedKillAll is exercised by the fixture", kaLine + kaMode > 0);
+        for (String f : new String[]{"chosen", "mode", "fallback", "lethal", "rank", "elig", "exempt", "protected"})
+            AssertJUnit.assertEquals("d22v1 field " + f + " matching Python", rows.size(), (int) ok.get(f));
     }
 
     @Test
