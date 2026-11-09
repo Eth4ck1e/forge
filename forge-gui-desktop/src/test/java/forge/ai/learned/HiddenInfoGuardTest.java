@@ -30,7 +30,7 @@ import forge.game.zone.ZoneType;
 /**
  * learned-ai D39 (audit rec. 1): hidden information never reaches a learned input. Every feature vector and record the
  * acting seat produces (spell_choice x / xa / schema-5 mana-hand fields, attack_target candidates, combat_snapshot,
- * CombatBoard solver input, turn_end) must be identical after the opponents' hand and library contents are exchanged
+ * CombatBoard solver input, turn_end, the D33 planner's seq_choice context and candidates) must be identical after the opponents' hand and library contents are exchanged
  * (sizes kept), their libraries reordered, and our own library reordered. A control checks the test is sensitive:
  * exchanging our own hand with our library does change the record. Rec. 2: a face-down creature has no name on the
  * solver board.
@@ -95,6 +95,11 @@ public class HiddenInfoGuardTest extends AITest {
         for (float[] a : (float[][]) sf[1]) out.add("spell " + Arrays.toString(a));
         out.add("spellRecord " + sf[2]);
         for (Player o : opps) out.add("attack " + Arrays.toString(Features.attackCandidate(me, o, seats, 3, o == opps.get(0))));
+        // D33 planner phase 1: seq_choice context (stack, mana, hold plan) and the enumerated instant-speed plays
+        LearnedSequencing.Pre pre = LearnedHooks.observing(me, true, () -> LearnedSequencing.pre(me));
+        StringBuilder seq = new StringBuilder(pre.context);
+        for (LearnedSequencing.Cand c : pre.cands) seq.append(' ').append(c.json);
+        out.add("seq " + seq);
         out.add("turn_end " + LearnedHooks.observing(me, true, () -> ManaView.turnEndJson(me, game.getPhaseHandler().getTurn(), true)));
         Combat combat = new Combat(me);
         combat.addAttacker(angel, opps.get(0));

@@ -357,3 +357,5 @@ LEARNED_MODEL=spell_choice=learned/spell_choice.onnx
 LEARNED_SPELL_CHOICE=true
 # learned-ai D22 phase 2: stock = Forge attack declaration; solver = forge.ai.learned.CombatSolver (D22 v1 rules); shadow = stock plays, solver logged (status shadow); -combat / -Dlearned.combat override
 LEARNED_COMBAT=stock
+# learned-ai D33: off = stock timing; planner = Sequencing planner phase 1 (seq_choice records at every priority, play unchanged); -seq / -Dlearned.sequencing override
+LEARNED_SEQUENCING=off

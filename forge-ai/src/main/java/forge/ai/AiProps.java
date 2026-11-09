@@ -167,6 +167,7 @@ public enum AiProps {
     LEARNED_ATTACK_TARGET("false"),
     LEARNED_SPELL_CHOICE("false"),
     LEARNED_MODEL(""),
+    LEARNED_SEQUENCING("off"), // learned-ai D33: "planner" = the Sequencing planner enumerates instant-speed plays at every priority (phase 1: seq_choice records only, play unchanged)
     LEARNED_COMBAT("stock"), // learned-ai D22 phase 2: "solver" = attack declaration by forge.ai.learned.CombatSolver; "shadow" = stock plays, solver logged
     // Sampling efficiency and deck-agnostic valuation. Setting PRUNING/CATEGORY_HOLD/ADAPTIVE_PLAYOUT to false and
     // EXTRA_ROUNDS to 0 reproduces the original flat Monte Carlo, which is what the A/B benchmark uses as baseline.

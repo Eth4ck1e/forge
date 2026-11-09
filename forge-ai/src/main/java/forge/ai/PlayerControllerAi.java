@@ -1032,7 +1032,8 @@ public class PlayerControllerAi extends PlayerController {
     public List<SpellAbility> chooseSpellAbilityToPlay() {
         forge.ai.learned.DecisionCensus.enter("spell_choice");
         try {
-            return census_chooseSpellAbilityToPlay();
+            // learned-ai D33: a LEARNED_SEQUENCING=planner seat logs seq_choice around its own decision (observation only)
+            return forge.ai.learned.LearnedSequencing.observe(player, this::census_chooseSpellAbilityToPlay);
         } finally {
             forge.ai.learned.DecisionCensus.exit();
         }

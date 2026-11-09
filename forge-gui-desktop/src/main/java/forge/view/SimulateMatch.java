@@ -249,6 +249,11 @@ public class SimulateMatch {
         if (params.containsKey("impact")) {
             forge.ai.learned.LearnedCombat.setImpactPath(params.get("impact").get(0));
         }
+        // learned-ai D33: -seq <off|planner> overrides LEARNED_SEQUENCING of every Learned seat (= -Dlearned.sequencing)
+        if (params.containsKey("seq")) {
+            forge.ai.learned.LearnedSequencing.setOverride(params.get("seq").get(0));
+            System.out.println("SIMNOTE learned sequencing override " + params.get("seq").get(0));
+        }
         if (params.containsKey("spellcands")) {
             forge.ai.learned.LearnedHooks.spellCandidates = Integer.parseInt(params.get("spellcands").get(0));
         }
@@ -370,6 +375,7 @@ public class SimulateMatch {
         System.out.println("\tfork - seat=<n> hook=<spell_choice|attack_target> index=<k> choose=<pos> seed=<s>: force candidate <pos> at the k-th (0-based) logged decision of that seat and hook, then reseed (0 = keep). One -fork flag with all tokens; game 1 only (use -n 1 -s <gameSeed> for a later game). hook=attack_assign: the k-th combat_attack record of a solver seat; pos 0..N-1 = the solver's top-N lines, N = the stock line.");
         System.out.println("\tmodel - [seat<N>:]<hook>=<path|random|none> (repeatable); none (or bare none / seat<N>:none for every hook) = exactly stock play with learned logging, the profile LEARNED_MODEL is not loaded");
         System.out.println("\tcombat - stock|solver|shadow: attack declaration of every Learned seat (shadow = stock plays, the solver is logged with status shadow) (overrides LEARNED_COMBAT; same as -Dlearned.combat)");
+        System.out.println("\tseq - off|planner: Sequencing planner of every Learned seat (planner = seq_choice records at every priority, phase 1 observation only) (overrides LEARNED_SEQUENCING; same as -Dlearned.sequencing)");
         System.out.println("\timpact - card-impact table (eval/card_impact.py JSON, or CSV name,threat_shrunk) for the combat solver's values and protected pieces");
         System.out.println("\tr - Turn cap in table rounds (rounds * players engine turns); games reaching it are recorded as draws. One SIMRESULT json line is printed per game.");
     }

@@ -62,6 +62,9 @@ public final class ManaView {
         d[1]++;
     }
 
+    /** learned-ai D33: the planner's record errors share the cap */
+    static void errorNote(String what, Throwable e) { error(what, e); }
+
     private static void error(String what, Throwable e) {
         if (errors++ < 20) System.out.println("SIMNOTE learned record error " + what + ": " + e);
     }

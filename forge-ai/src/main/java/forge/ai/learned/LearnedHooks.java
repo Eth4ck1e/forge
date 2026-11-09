@@ -657,6 +657,7 @@ public final class LearnedHooks {
      * choice); "pass" is the extra last candidate. Returns the play to make, or null to pass priority.
      */
     public static forge.game.spellability.SpellAbility spellChoice(Player ai, List<forge.game.spellability.SpellAbility> approved) {
+        LearnedSequencing.capture(ai, approved);   // D33 planner phase 1: stock's list beside the planner's (no-op unless armed)
         if (approved.isEmpty()) return null;   // nothing playable: pass, nothing to decide
         boolean on = hookOn(ai, AiProps.LEARNED_SPELL_CHOICE);   // loads profile models if not yet loaded
         Scorer scorer = scorerFor(seatNumber(ai), SPELL_CHOICE);   // D36: per seat

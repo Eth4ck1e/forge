@@ -52,7 +52,7 @@ public class FeaturesTest extends AITest {
         AssertJUnit.assertEquals(570, Features.size());
         AssertJUnit.assertEquals(9, Features.CANDIDATE.length);
         // schema 5: 17 spell_choice columns appended after the 70 of schema 2-4 (old indices unchanged)
-        AssertJUnit.assertEquals(8, Features.SCHEMA);   // 6: combat_attack record fields only (issue #28); 7: combat_snapshot requirement fields; 8: spell_choice candInfo
+        AssertJUnit.assertEquals(9, Features.SCHEMA);   // 6: combat_attack record fields only (issue #28); 7: combat_snapshot requirement fields; 8: spell_choice candInfo; 9: seq_choice records
         AssertJUnit.assertEquals(87, Features.SPELL_CANDIDATE.length);
         AssertJUnit.assertEquals("manaLeft", Features.SPELL_CANDIDATE[31]);
         AssertJUnit.assertEquals("api.other", Features.SPELL_CANDIDATE[69]);

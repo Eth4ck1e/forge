@@ -46,7 +46,7 @@ public final class LearnLog {
         sb.append(",\"spell_choice\":"); strings(sb, java.util.Arrays.asList(Features.SPELL_CANDIDATE));
         sb.append("},\"hooks\":[\"attack_target\",\"spell_choice\"]");
         sb.append(",\"spellLegacy\":").append(Features.SPELL_LEGACY);   // schema 5: spell_choice xa columns of schema 2-4
-        sb.append(",\"raw\":[\"combat_snapshot\",\"combat_damage\",\"combat_result\",\"combat_attack\",\"turn_end\",\"mana_payment\",\"mana_lost\"]}\n");
+        sb.append(",\"raw\":[\"combat_snapshot\",\"combat_damage\",\"combat_result\",\"combat_attack\",\"turn_end\",\"mana_payment\",\"mana_lost\",\"seq_choice\"]}\n");
         out.write(sb.toString());
         Runtime.getRuntime().addShutdownHook(new Thread(LearnLog::close));
         forge.game.combat.Combat.learnedDamageObserver = CombatSnapshot::damage;   // D19: "combat_damage" records
@@ -59,6 +59,7 @@ public final class LearnLog {
     public static void beginGame(int iGame, long gameSeed) {
         CombatSnapshot.resetPending();   // outside the LearnLog lock: CombatSnapshot locks itself, then LearnLog
         ManaView.resetGame();
+        LearnedSequencing.resetGame();
         synchronized (LearnLog.class) { game = iGame; gseed = gameSeed; }
         if (enabled()) System.out.println("SIMNOTE learned schema " + Features.SCHEMA + ": spell_choice manaLeft = capacity (every mana source,"
                 + " tapped or not, as in schema 2-4) - cost; manaUntapped / manaUntappedLeft (appended) count untapped usable sources + floating mana");
