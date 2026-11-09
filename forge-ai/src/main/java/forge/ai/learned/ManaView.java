@@ -257,7 +257,7 @@ public final class ManaView {
 
     /**
      * Appended features for each approved play and the pass candidate, plus (when {@code record}) the spell_choice
-     * fields {@code mana}, {@code hand}, {@code handCastable}, {@code castable}, {@code candMana}. Call from a saved state.
+     * fields {@code mana}, {@code hand}, {@code handCastable}, {@code castable}, {@code candMana}, {@code candInfo} (schema 8, see {@link #candJson}). Call from a saved state.
      */
     static Spell spell(Player ai, List<SpellAbility> approved, boolean record) {
         Spell out = new Spell();
@@ -265,6 +265,7 @@ public final class ManaView {
         out.extra = new float[n][];
         int untapped = untapped(ai);
         StringBuilder cm = record ? new StringBuilder(256) : null;
+        StringBuilder cd = record ? new StringBuilder(256) : null;   // schema 8: candInfo (identity + targets)
         for (int i = 0; i < approved.size(); i++) {
             SpellAbility sa = approved.get(i);
             boolean now = false, inst = false;
@@ -288,6 +289,8 @@ public final class ManaView {
                 Card h = sa.getHostCard();   // printed cost above; a commander also pays tax for its earlier casts
                 if (h != null && h.isCommander() && sa.isSpell()) cm.append(",\"cmdCasts\":").append(ai.getCommanderCast(h));
                 cm.append('}');
+                if (i > 0) cd.append(',');
+                try { candJson(cd, ai, sa); } catch (RuntimeException e) { error("cand " + sa, e); cd.append("{}"); }
             }
         }
         out.extra[n - 1] = Features.passCandidateExtra(untapped);
@@ -303,8 +306,72 @@ public final class ManaView {
         sb.append(",\"handCastable\":").append(castable.size());
         sb.append(",\"castable\":"); strs(sb, castable);
         sb.append(",\"candMana\":[").append(cm).append(approved.isEmpty() ? "" : ",").append("null]");
+        sb.append(",\"candInfo\":[").append(cd).append(approved.isEmpty() ? "" : ",").append("null]");
         out.json = sb.toString();
         return out;
+    }
+
+    // ---- spell_choice: candidate identity and chosen targets (schema 8) ---------------------------------------------
+    /**
+     * One {@code candInfo} entry: {@code card} (host name), {@code cardId}, {@code api} (root API), {@code targets}
+     * [{name, id, ctrl (seat), kind card|pw|player|spell, api (the targeting (sub-)ability)}] over the whole
+     * sub-ability chain plus unchained charm modes, {@code tgtPlayers} (seats, distinct, in order) and {@code modes}
+     * (chosen mode descriptions) for a charm. The targets are the acting seat's own intent at decision time (D39 own
+     * information); a target card in a hidden zone the seat does not own, or face down, is logged without a name.
+     */
+    static void candJson(StringBuilder sb, Player ai, SpellAbility sa) {
+        Card h = sa.getHostCard();
+        sb.append("{\"card\":"); str(sb, h == null ? null : h.getName());
+        sb.append(",\"cardId\":").append(h == null ? -1 : h.getId());
+        sb.append(",\"api\":"); str(sb, sa.getApi() == null ? null : sa.getApi().name());
+        List<SpellAbility> nodes = new ArrayList<>();
+        for (SpellAbility s = sa; s != null; s = s.getSubAbility()) nodes.add(s);
+        List<? extends SpellAbility> chosen = sa.getChosenList();
+        if (chosen != null && !sa.isSpell()) {   // CharmAi chains the modes only for spells; abilities keep the list
+            for (SpellAbility m : chosen) for (SpellAbility s = m; s != null; s = s.getSubAbility()) nodes.add(s);
+        }
+        List<Integer> seats = new ArrayList<>();
+        sb.append(",\"targets\":[");
+        boolean first = true;
+        for (SpellAbility s : nodes) {
+            if (!s.usesTargeting() || s.getTargets() == null) continue;
+            String api = s.getApi() == null ? null : s.getApi().name();
+            for (Card c : s.getTargets().getTargetCards()) {
+                if (!first) sb.append(','); first = false;
+                boolean hidden = c.isFaceDown() || (c.getZone() != null && c.getZone().getZoneType().isHidden() && c.getOwner() != ai);
+                sb.append("{\"name\":"); str(sb, hidden ? null : c.getName());
+                sb.append(",\"id\":").append(c.getId()).append(",\"ctrl\":").append(LearnedHooks.seatNumber(c.getController()));
+                sb.append(",\"kind\":\"").append(c.isPlaneswalker() ? "pw" : "card").append("\",\"api\":"); str(sb, api);
+                sb.append('}');
+            }
+            for (Player p : s.getTargets().getTargetPlayers()) {
+                if (!first) sb.append(','); first = false;
+                int seat = LearnedHooks.seatNumber(p);
+                if (!seats.contains(seat)) seats.add(seat);
+                sb.append("{\"name\":"); str(sb, p.getName());
+                sb.append(",\"id\":").append(p.getId()).append(",\"ctrl\":").append(seat);
+                sb.append(",\"kind\":\"player\",\"api\":"); str(sb, api);
+                sb.append('}');
+            }
+            for (SpellAbility t : s.getTargets().getTargetSpells()) {
+                if (!first) sb.append(','); first = false;
+                Card c = t.getHostCard();
+                sb.append("{\"name\":"); str(sb, c == null ? null : c.getName());
+                sb.append(",\"id\":").append(c == null ? -1 : c.getId());
+                sb.append(",\"ctrl\":").append(t.getActivatingPlayer() == null ? 0 : LearnedHooks.seatNumber(t.getActivatingPlayer()));
+                sb.append(",\"kind\":\"spell\",\"api\":"); str(sb, api);
+                sb.append('}');
+            }
+        }
+        sb.append("],\"tgtPlayers\":[");
+        for (int i = 0; i < seats.size(); i++) { if (i > 0) sb.append(','); sb.append(seats.get(i)); }
+        sb.append(']');
+        if (sa.getApi() == ApiType.Charm) {
+            List<String> modes = new ArrayList<>();
+            if (chosen != null) for (SpellAbility m : chosen) modes.add(m.getDescription());
+            sb.append(",\"modes\":"); strs(sb, modes);
+        }
+        sb.append('}');
     }
 
     // ---- raw records ------------------------------------------------------------------------------------------------

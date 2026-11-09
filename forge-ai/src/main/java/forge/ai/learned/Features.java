@@ -27,8 +27,8 @@ public final class Features {
     // features appended (SPELL_EXTRA, old indices unchanged), spell_choice mana/hand fields, turn_end / mana_payment /
     // mana_lost records; 6 (issue #28): combat_attack fallbackReason / rejected / addedForced / banned / playerReq
     // (vectors unchanged); 7 (issue #28 parity): attackers combat_snapshot gains mustAttackCards / mustAttackAny /
-    // noAttack (vectors unchanged)
-    public static final int SCHEMA = 7;
+    // noAttack (vectors unchanged); 8: spell_choice candInfo (card, cardId, api, targets, tgtPlayers, modes; vectors unchanged)
+    public static final int SCHEMA = 8;
     public static final int SEATS = 4;
     /** Creature slots per seat, best first by power. */
     public static final int CREATURE_SLOTS = 6;
