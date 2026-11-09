@@ -320,7 +320,7 @@ public final class LearnedHooks {
             if (o == stock) stockIdx = i;
         }
         // observation only unless a model acts on them: the features are taken from a saved state that is put back
-        final Object[] feats = observing(ai.getGame(), !learned, () -> {
+        final Object[] feats = observing(ai, !learned, () -> {
             float[][] fa = new float[opponents.size()][];
             for (int i = 0; i < opponents.size(); i++)
                 fa[i] = Features.attackCandidate(ai, opponents.get(i), seats, threat.getOrDefault(opponents.get(i), 0), opponents.get(i) == stock);
@@ -381,7 +381,7 @@ public final class LearnedHooks {
             java.util.function.BiFunction<List<forge.game.spellability.SpellAbility>, Integer, List<forge.game.spellability.SpellAbility>> collect,
             java.util.function.Supplier<forge.game.spellability.SpellAbility> stock) {
         if (!forkPointNext(SPELL_CHOICE, seatNumber(ai))) {
-            observing(ai.getGame(), true, () -> spellChoice(ai, collect.apply(new ArrayList<>(saList), spellCandidates)));   // the collection sorts its list in place
+            observing(ai, true, () -> spellChoice(ai, collect.apply(new ArrayList<>(saList), spellCandidates)));   // the collection sorts its list in place
             return stock.get();
         }
         final int[] st = SNAPSHOT_DEPTH.get();
@@ -390,7 +390,7 @@ public final class LearnedHooks {
         st[2]++;   // hold the branch reseed until the forced play is found
         try {
             LAST_FORCED.set(-2);
-            observing(ai.getGame(), true, () -> {
+            observing(ai, true, () -> {
                 seen.addAll(collect.apply(new ArrayList<>(saList), spellCandidates));
                 return spellChoice(ai, seen);
             });
@@ -420,7 +420,7 @@ public final class LearnedHooks {
 
     /** Runs a learn-log record ({@code work}) from a saved state that is put back afterwards: logging never changes play. */
     public static <T> T transparently(Player ai, String hook, java.util.function.Supplier<T> work) {
-        return observing(ai.getGame(), LearnLog.enabled(), work);
+        return observing(ai, LearnLog.enabled(), work);
     }
 
     /** per thread: [depth of nested saved states, fork reseed pending (1), reseed held by the caller (>0)] */
@@ -428,13 +428,15 @@ public final class LearnedHooks {
 
     /**
      * Runs {@code work}; when {@code observe}, the draw state (randomness, id counters, timestamp/card ids, AI card
-     * memories, AiCache, AiController fields) is saved before and put back after, so the work leaves play unchanged.
-     * Nested calls share the outermost saved state. A fork reseed requested inside is applied after the restore.
+     * memories, AiCache, AiController fields, mana-ability choices) is saved before and put back after, so the work
+     * leaves play unchanged. {@code acting} is the seat the work is done for (only its own hand is visited). Nested
+     * calls share the outermost saved state. A fork reseed requested inside is applied after the restore.
      */
-    static <T> T observing(forge.game.Game game, boolean observe, java.util.function.Supplier<T> work) {
+    static <T> T observing(Player acting, boolean observe, java.util.function.Supplier<T> work) {
         final int[] st = SNAPSHOT_DEPTH.get();
         if (!observe || st[0] > 0) return work.get();
-        final Object[] snap = saveDrawState(game);
+        final forge.game.Game game = acting.getGame();
+        final Object[] snap = saveDrawState(game, acting);
         st[0]++;
         try {
             return work.get();
@@ -459,7 +461,7 @@ public final class LearnedHooks {
     }
 
     /** [rng copy (null if not copyable), static id counters, game timestamp, cardIdCounter, hiddenCardIdCounter, AI card memories, AiCache]. */
-    private static Object[] saveDrawState(forge.game.Game game) {
+    private static Object[] saveDrawState(forge.game.Game game, Player acting) {
         Object rng = null;
         try {
             java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
@@ -477,7 +479,7 @@ public final class LearnedHooks {
         } catch (Exception e) {
             throw new IllegalStateException("learned-ai: id counters not found: " + e, e);
         }
-        return new Object[] {rng, counters, game.getTimestamp(), cardId, hiddenId, saveMemories(game), saveAiCache(), saveControllers(game), saveManaChoices(game)};
+        return new Object[] {rng, counters, game.getTimestamp(), cardId, hiddenId, saveMemories(game), saveAiCache(), saveControllers(game), saveManaChoices(game, acting)};
     }
 
     /** Mutable AiController fields (shallow): the predicted combat and other per-priority caches evaluation fills. */
@@ -522,24 +524,28 @@ public final class LearnedHooks {
      * test payment's sources) and the undo flag ({@code SpellAbility.undoable}, cleared by GameActionUtil.generatedMana
      * when ComputerUtilMana.predictMana tests a source with a sub-ability such as a Talisman; a cleared flag scores the
      * source +50 in calculateScoreForManaAbility, so a check run for a record reordered later payments). Covers every
-     * mana ability (and its sub-abilities) on the battlefield or in a hand. Kept in parallel lists, not an identity map:
-     * requesting identity hashes would itself shift later identity hashes.
+     * mana ability (and its sub-abilities) on any battlefield or in the
+     * acting seat's own hand. Kept in parallel lists, not an identity map: requesting identity hashes would itself shift
+     * later identity hashes.
      */
-    private static Object[] saveManaChoices(forge.game.Game game) {
+    private static Object[] saveManaChoices(forge.game.Game game, Player acting) {
         final List<forge.game.spellability.AbilityManaPart> parts = new ArrayList<>();
         final List<String> choices = new ArrayList<>();
         final List<forge.game.spellability.SpellAbility> sas = new ArrayList<>();
         final List<Boolean> undo = new ArrayList<>();
-        for (Player p : game.getPlayers()) {
-            for (forge.game.zone.ZoneType z : new forge.game.zone.ZoneType[] {forge.game.zone.ZoneType.Battlefield, forge.game.zone.ZoneType.Hand}) {
-                for (forge.game.card.Card c : p.getCardsIn(z)) {
-                    for (forge.game.spellability.SpellAbility ma : c.getManaAbilities()) {
-                        for (forge.game.spellability.SpellAbility s = ma; s != null; s = s.getSubAbility()) {
-                            sas.add(s); undo.add(undoable(s));
-                            forge.game.spellability.AbilityManaPart mp = s.getManaPart();
-                            if (mp == null) continue;
-                            parts.add(mp); choices.add(mp.getExpressChoice());
-                        }
+        // public battlefields of every seat, then the acting seat's own hand (D39: never another seat's hand). Zone views
+        // only, no new card collection (that would request card identity hashes).
+        final List<Iterable<forge.game.card.Card>> zones = new ArrayList<>();
+        for (Player p : game.getPlayers()) zones.add(p.getCardsIn(forge.game.zone.ZoneType.Battlefield));
+        zones.add(acting.getCardsIn(forge.game.zone.ZoneType.Hand));   // own hand: getAvailableManaSources pays from it
+        for (Iterable<forge.game.card.Card> zone : zones) {
+            for (forge.game.card.Card c : zone) {
+                for (forge.game.spellability.SpellAbility ma : c.getManaAbilities()) {
+                    for (forge.game.spellability.SpellAbility s = ma; s != null; s = s.getSubAbility()) {
+                        sas.add(s); undo.add(undoable(s));
+                        forge.game.spellability.AbilityManaPart mp = s.getManaPart();
+                        if (mp == null) continue;
+                        parts.add(mp); choices.add(mp.getExpressChoice());
                     }
                 }
             }
@@ -699,7 +705,7 @@ public final class LearnedHooks {
     static Object[] spellFeatures(Player ai, List<forge.game.spellability.SpellAbility> approved, List<Player> seats,
                                   boolean observeLegacy, boolean record) {
         final int n = approved.size() + 1;
-        final Object[] feats = observing(ai.getGame(), observeLegacy, () -> {
+        final Object[] feats = observing(ai, observeLegacy, () -> {
             float[] fx = Features.state(ai);
             float[][] fa = new float[n][];
             int manaAvail = forge.ai.ComputerUtilMana.getAvailableManaEstimate(ai, false);
@@ -707,7 +713,7 @@ public final class LearnedHooks {
             fa[n - 1] = Features.passCandidate(n - 1, manaAvail);
             return new Object[] {fx, fa};
         });
-        final ManaView.Spell extra = observing(ai.getGame(), true, () -> ManaView.spell(ai, approved, record));
+        final ManaView.Spell extra = observing(ai, true, () -> ManaView.spell(ai, approved, record));
         float[][] xa = (float[][]) feats[1];
         for (int i = 0; i < n; i++) xa[i] = Features.concat(xa[i], extra.extra[i]);
         return new Object[] {feats[0], xa, extra.json};

@@ -95,7 +95,7 @@ public class HiddenInfoGuardTest extends AITest {
         for (float[] a : (float[][]) sf[1]) out.add("spell " + Arrays.toString(a));
         out.add("spellRecord " + sf[2]);
         for (Player o : opps) out.add("attack " + Arrays.toString(Features.attackCandidate(me, o, seats, 3, o == opps.get(0))));
-        out.add("turn_end " + LearnedHooks.observing(game, true, () -> ManaView.turnEndJson(me, game.getPhaseHandler().getTurn(), true)));
+        out.add("turn_end " + LearnedHooks.observing(me, true, () -> ManaView.turnEndJson(me, game.getPhaseHandler().getTurn(), true)));
         Combat combat = new Combat(me);
         combat.addAttacker(angel, opps.get(0));
         out.add("snapshot " + CombatSnapshot.json(me, combat, "attackers"));

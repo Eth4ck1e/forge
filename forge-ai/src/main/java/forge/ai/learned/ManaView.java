@@ -417,7 +417,7 @@ public final class ManaView {
         for (Player p : Features.seatsFrom(active)) {
             if (p.hasLost()) continue;
             try {
-                String body = LearnedHooks.observing(game, true, () -> turnEndJson(p, turn, p == active));
+                String body = LearnedHooks.observing(p, true, () -> turnEndJson(p, turn, p == active));
                 LearnLog.raw("turn_end", body);
             } catch (RuntimeException e) {
                 error("turn_end", e);
