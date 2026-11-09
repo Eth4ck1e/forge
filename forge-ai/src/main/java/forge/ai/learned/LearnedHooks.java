@@ -477,7 +477,7 @@ public final class LearnedHooks {
         } catch (Exception e) {
             throw new IllegalStateException("learned-ai: id counters not found: " + e, e);
         }
-        return new Object[] {rng, counters, game.getTimestamp(), cardId, hiddenId, saveMemories(game), saveAiCache(), saveControllers(game)};
+        return new Object[] {rng, counters, game.getTimestamp(), cardId, hiddenId, saveMemories(game), saveAiCache(), saveControllers(game), saveManaChoices(game)};
     }
 
     /** Mutable AiController fields (shallow): the predicted combat and other per-priority caches evaluation fills. */
@@ -514,6 +514,57 @@ public final class LearnedHooks {
         } catch (IllegalAccessException ex) {
             throw new IllegalStateException("learned-ai: AiController fields: " + ex, ex);
         }
+    }
+
+    /**
+     * Mana-ability state the AI's payability checks change as a side effect (learned-ai): the last colour choice
+     * ({@code AbilityManaPart} express choice, set on every source a check considers and cleared only for a completed
+     * test payment's sources) and the undo flag ({@code SpellAbility.undoable}, cleared by GameActionUtil.generatedMana
+     * when ComputerUtilMana.predictMana tests a source with a sub-ability such as a Talisman; a cleared flag scores the
+     * source +50 in calculateScoreForManaAbility, so a check run for a record reordered later payments). Covers every
+     * mana ability (and its sub-abilities) on the battlefield or in a hand. Kept in parallel lists, not an identity map:
+     * requesting identity hashes would itself shift later identity hashes.
+     */
+    private static Object[] saveManaChoices(forge.game.Game game) {
+        final List<forge.game.spellability.AbilityManaPart> parts = new ArrayList<>();
+        final List<String> choices = new ArrayList<>();
+        final List<forge.game.spellability.SpellAbility> sas = new ArrayList<>();
+        final List<Boolean> undo = new ArrayList<>();
+        for (Player p : game.getPlayers()) {
+            for (forge.game.zone.ZoneType z : new forge.game.zone.ZoneType[] {forge.game.zone.ZoneType.Battlefield, forge.game.zone.ZoneType.Hand}) {
+                for (forge.game.card.Card c : p.getCardsIn(z)) {
+                    for (forge.game.spellability.SpellAbility ma : c.getManaAbilities()) {
+                        for (forge.game.spellability.SpellAbility s = ma; s != null; s = s.getSubAbility()) {
+                            sas.add(s); undo.add(undoable(s));
+                            forge.game.spellability.AbilityManaPart mp = s.getManaPart();
+                            if (mp == null) continue;
+                            parts.add(mp); choices.add(mp.getExpressChoice());
+                        }
+                    }
+                }
+            }
+        }
+        return new Object[] {parts, choices, sas, undo};
+    }
+
+    private static final java.lang.reflect.Field UNDOABLE;
+    static {
+        try { UNDOABLE = field("forge.game.spellability.SpellAbility", "undoable"); }
+        catch (Exception e) { throw new IllegalStateException("learned-ai: SpellAbility.undoable not found: " + e, e); }
+    }
+
+    private static boolean undoable(forge.game.spellability.SpellAbility sa) {
+        try { return UNDOABLE.getBoolean(sa); } catch (IllegalAccessException e) { throw new IllegalStateException(e); }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void restoreManaChoices(Object[] saved) {
+        final List<forge.game.spellability.AbilityManaPart> parts = (List<forge.game.spellability.AbilityManaPart>) saved[0];
+        final List<String> choices = (List<String>) saved[1];
+        for (int i = 0; i < parts.size(); i++) parts.get(i).setExpressChoice(choices.get(i));
+        final List<forge.game.spellability.SpellAbility> sas = (List<forge.game.spellability.SpellAbility>) saved[2];
+        final List<Boolean> undo = (List<Boolean>) saved[3];
+        for (int i = 0; i < sas.size(); i++) sas.get(i).setUndoable(undo.get(i));
     }
 
     /** AiCache (global: board evaluations, life-in-danger) fills while the AI evaluates; a hit skips the random draws. */
@@ -589,6 +640,7 @@ public final class LearnedHooks {
             restoreMemories((java.util.Map<Object, java.util.Map<Object, java.util.Set<Object>>>) snap[5]);
             restoreAiCache((com.google.common.collect.Multimap<Object, Object>) snap[6]);
             restoreControllers((java.util.Map<AiController, Object[]>) snap[7]);
+            restoreManaChoices((Object[]) snap[8]);
         } catch (Exception e) {
             throw new IllegalStateException("learned-ai: cannot restore id counters: " + e, e);
         }
