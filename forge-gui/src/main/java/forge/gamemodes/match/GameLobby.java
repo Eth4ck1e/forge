@@ -519,7 +519,11 @@ public abstract class GameLobby implements IHasGameType {
             final LobbyPlayer lobbyPlayer;
             if (isAI) {
                 String aiProfileOverride = slot.getAiProfile();
-                lobbyPlayer = GamePlayerUtil.createAiPlayer(name, avatar, sleeve, aiOptions, aiProfileOverride);
+                final int seatNo = data.slots.indexOf(slot) + 1;   // learned-ai: -Dlearned.seatProfiles per-seat override
+                final String seatProfile = forge.ai.learned.SeatProfiles.profileFor(seatNo);
+                if (seatProfile != null) aiProfileOverride = seatProfile;
+                lobbyPlayer = GamePlayerUtil.createAiPlayer(seatProfile != null ? forge.ai.learned.SeatProfiles.nameFor(seatProfile, seatNo) : name,
+                        avatar, sleeve, aiOptions, aiProfileOverride);
             } else {
                 boolean setNameNow = false;
                 if (!hasNameBeenSet && slot.getType() == LobbySlotType.LOCAL) {
