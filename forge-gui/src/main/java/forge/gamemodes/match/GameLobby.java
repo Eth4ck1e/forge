@@ -225,6 +225,10 @@ public abstract class GameLobby implements IHasGameType {
         if (StringUtils.isEmpty(slot.getName()) && slot.getType() != LobbySlotType.OPEN) {
             slot.setName(randomName());
         }
+        if (slot.getType() == LobbySlotType.AI) {   // learned-ai: -Dlearned.seatProfiles preassigns the slot's AI profile
+            final String seatProfile = forge.ai.learned.SeatProfiles.profileFor(data.slots.size());
+            if (seatProfile != null) slot.setAiProfile(seatProfile);
+        }
         if (data.slots.size() == 1) {
             // If first slot, make archenemy
             slot.setIsArchenemy(true);
@@ -519,11 +523,15 @@ public abstract class GameLobby implements IHasGameType {
             final LobbyPlayer lobbyPlayer;
             if (isAI) {
                 String aiProfileOverride = slot.getAiProfile();
-                final int seatNo = data.slots.indexOf(slot) + 1;   // learned-ai: -Dlearned.seatProfiles per-seat override
-                final String seatProfile = forge.ai.learned.SeatProfiles.profileFor(seatNo);
-                if (seatProfile != null) aiProfileOverride = seatProfile;
-                lobbyPlayer = GamePlayerUtil.createAiPlayer(seatProfile != null ? forge.ai.learned.SeatProfiles.nameFor(seatProfile, seatNo) : name,
-                        avatar, sleeve, aiOptions, aiProfileOverride);
+                // learned-ai: a learned-style seat (or one listed in -Dlearned.seatProfiles, preassigned in addSlot) is
+                // named "<profile> · <deck> [slot]" so the table shows which style plays which deck
+                final int seatNo = data.slots.indexOf(slot) + 1;
+                final boolean listed = forge.ai.learned.SeatProfiles.profileFor(seatNo, false) != null;
+                final boolean styled = listed || forge.ai.learned.SeatProfiles.isLearnedStyle(aiProfileOverride);
+                final String aiName = styled && aiProfileOverride != null && !aiProfileOverride.isEmpty()
+                        ? forge.ai.learned.SeatProfiles.nameFor(aiProfileOverride, slot.getDeck() == null ? null : slot.getDeck().getName(), seatNo)
+                        : name;
+                lobbyPlayer = GamePlayerUtil.createAiPlayer(aiName, avatar, sleeve, aiOptions, aiProfileOverride);
             } else {
                 boolean setNameNow = false;
                 if (!hasNameBeenSet && slot.getType() == LobbySlotType.LOCAL) {

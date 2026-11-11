@@ -159,7 +159,7 @@ public class PlayerPanel extends FPanel {
         this.add(radioAi, "wrap");
 
         int cellY = 1;
-        if (prefs.getPrefBoolean(FPref.UI_ENABLE_AI_PICKER)) {
+        if (forge.ai.learned.SeatProfiles.aiPickerEnabled(prefs.getPrefBoolean(FPref.UI_ENABLE_AI_PICKER))) {   // learned-ai: on by default
             this.add(aiPickerLabel, "w 40px, h 30px");
             populateAiPickerComboBox();
             aiPickerComboBox.addTo(this, "h 30px, pushx, growx, wrap");
@@ -251,7 +251,7 @@ public class PlayerPanel extends FPanel {
         txtPlayerName.setText(type == LobbySlotType.OPEN ? StringUtils.EMPTY : playerName);
         nameRandomiser.setEnabled(mayEdit);
 
-        boolean enableAiPicker = mayEdit && type == LobbySlotType.AI && prefs.getPrefBoolean(FPref.UI_ENABLE_AI_PICKER);
+        boolean enableAiPicker = mayEdit && type == LobbySlotType.AI && forge.ai.learned.SeatProfiles.aiPickerEnabled(prefs.getPrefBoolean(FPref.UI_ENABLE_AI_PICKER));   // learned-ai
         aiPickerLabel.setVisible(enableAiPicker);
         aiPickerComboBox.setVisible(enableAiPicker);
         aiPickerComboBox.setEnabled(enableAiPicker);
@@ -500,11 +500,14 @@ public class PlayerPanel extends FPanel {
      */
     private void populateAiPickerComboBox() {
         aiPickerComboBox.removeAllItems();
+        // learned-ai: first item = no override (Preferences > AI profile, as with the picker off); learned styles are
+        // labelled with their best-fit deck ("Pressure · best deck: Token Triumph"); getAiProfile maps labels back
+        aiPickerComboBox.addItem(forge.ai.learned.SeatProfiles.PREFS_ITEM);
         final List<String> aiProfiles = AiProfileUtil.getAvailableProfiles();
         for (final String profile : aiProfiles) {
-            aiPickerComboBox.addItem(profile);
+            aiPickerComboBox.addItem(forge.ai.learned.SeatProfiles.pickerLabel(profile));
         }
-        aiPickerComboBox.setSelectedItem(FPref.UI_CURRENT_AI_PROFILE.getDefault());
+        aiPickerComboBox.setSelectedItem(forge.ai.learned.SeatProfiles.PREFS_ITEM);
         aiPickerComboBox.setEnabled(true);
     }
 
@@ -540,7 +543,7 @@ public class PlayerPanel extends FPanel {
             final Object selection = comboBox.getSelectedItem();
 
             if (selection != null) {
-                setAiProfile(selection.toString());
+                setAiProfile(forge.ai.learned.SeatProfiles.profileOfLabel(selection.toString()));   // learned-ai: label -> profile
                 lobby.changePlayerFocus(index);
                 lobby.firePlayerChangeListener(index);
             }
@@ -1003,14 +1006,14 @@ public class PlayerPanel extends FPanel {
     public void setAiProfile(String aiProfile) {
         this.aiProfile = aiProfile;
         if (aiProfile != null) {
-            aiPickerComboBox.setSelectedItem(aiProfile);
+            aiPickerComboBox.setSelectedItem(forge.ai.learned.SeatProfiles.pickerLabel(aiProfile));   // learned-ai: labels
         }
     }
 
     public String getAiProfile() {
         final Object selection = aiPickerComboBox.getSelectedItem();
         if (selection != null) {
-            return selection.toString();
+            return forge.ai.learned.SeatProfiles.profileOfLabel(selection.toString());   // learned-ai: "" = Preferences profile
         }
         return aiProfile;
     }

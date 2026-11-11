@@ -1318,6 +1318,10 @@ public class VLobby implements ILobbyView {
         return cachedDeckChoosers.computeIfAbsent(prefKey, (key) -> {
             final GameType gameType = forCommander ? type : GameType.Constructed;
             final FDeckChooser fdc = new FDeckChooser(null, ai, gameType, forCommander);
+            if (type == GameType.Commander) {   // learned-ai: -Dlearned.seatDecks preassigns this slot's precon (once per launch)
+                final String seatDeckState = forge.gamemodes.match.LearnedSeatDecks.chooserStateFor(iSlot + 1);
+                if (seatDeckState != null) prefs.setPref(prefKey, seatDeckState);
+            }
             fdc.initialize(prefKey, deckType);
             fdc.getLstDecks().setRequiredFormat(deckListFormat());
             fdc.setDeckSelectionCommand(() -> selectMainDeck(fdc, iSlot, forCommander));
