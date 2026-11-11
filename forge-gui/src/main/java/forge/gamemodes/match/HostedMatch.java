@@ -296,6 +296,7 @@ public class HostedMatch {
                 currentGame.subscribeToEvents(playbackControl);
             }
             // Actually start the game!
+            forge.ai.learned.LiveLog.beginGame(currentGame);   // learned-ai: -Dlearned.learnlog=<dir> records live games
             try {
                 match.startGame(currentGame, startGameHook);
             } catch (final RuntimeException | Error ex) {
@@ -303,6 +304,8 @@ public class HostedMatch {
                     replay.abort();
                 }
                 throw ex;
+            } finally {
+                forge.ai.learned.LiveLog.endGame(currentGame);   // learned-ai
             }
             // this function waits?
             if (endGameHook != null) {

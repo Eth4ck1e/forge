@@ -419,6 +419,7 @@ public final class ManaView {
         }
         for (Player p : Features.seatsFrom(active)) {
             if (p.hasLost()) continue;
+            if (LiveLog.isHuman(p)) continue;   // GUI play: a human seat's hand is never recorded (sims: every seat is AI)
             try {
                 String body = LearnedHooks.observing(p, true, () -> turnEndJson(p, turn, p == active));
                 LearnLog.raw("turn_end", body);

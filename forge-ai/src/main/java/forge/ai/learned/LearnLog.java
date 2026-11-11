@@ -30,15 +30,21 @@ public final class LearnLog {
 
     public static boolean enabled() { return out != null; }
 
+    private static boolean hooked;   // the close-on-exit hook is registered once per process
+
     /** Opens {@code dir/decisions-s<seed>.jsonl.gz} and writes the schema line. */
     public static synchronized void open(File dir, long seed0) throws IOException {
+        dir.mkdirs();
+        openFile(new File(dir, "decisions-s" + seed0 + ".jsonl.gz"), seed0);
+    }
+
+    /** Opens the given gzip JSON-lines file and writes the schema line (learned-ai GUI play: one file per live game). */
+    public static synchronized void openFile(File f, long seed0) throws IOException {
         close();
         if (Features.size() != Features.names().size()) {
             throw new IllegalStateException("feature vector size " + Features.size() + " != names " + Features.names().size());
         }
-        dir.mkdirs();
         seed = seed0;
-        File f = new File(dir, "decisions-s" + seed0 + ".jsonl.gz");
         out = new OutputStreamWriter(new GZIPOutputStream(new BufferedOutputStream(new FileOutputStream(f), 1 << 16)), StandardCharsets.UTF_8);
         StringBuilder sb = new StringBuilder("{\"schema\":").append(Features.SCHEMA).append(",\"seed\":").append(seed0);
         sb.append(",\"names\":"); strings(sb, Features.names());
@@ -48,7 +54,7 @@ public final class LearnLog {
         sb.append(",\"spellLegacy\":").append(Features.SPELL_LEGACY);   // schema 5: spell_choice xa columns of schema 2-4
         sb.append(",\"raw\":[\"combat_snapshot\",\"combat_damage\",\"combat_result\",\"combat_attack\",\"turn_end\",\"mana_payment\",\"mana_lost\",\"seq_choice\",\"cast_util\"]}\n");
         out.write(sb.toString());
-        Runtime.getRuntime().addShutdownHook(new Thread(LearnLog::close));
+        if (!hooked) { Runtime.getRuntime().addShutdownHook(new Thread(LearnLog::close)); hooked = true; }
         forge.game.combat.Combat.learnedDamageObserver = CombatSnapshot::damage;   // D19: "combat_damage" records
         forge.game.combat.Combat.learnedEndObserver = CombatSnapshot::combatEnd;   // D19: "combat_result" records
         forge.game.phase.PhaseHandler.learnedCleanupObserver = ManaView::onCleanup;   // D33: "turn_end" records
