@@ -29,7 +29,9 @@ public final class Features {
     // (vectors unchanged); 7 (issue #28 parity): attackers combat_snapshot gains mustAttackCards / mustAttackAny /
     // noAttack (vectors unchanged); 8: spell_choice candInfo (card, cardId, api, targets, tgtPlayers, modes; vectors unchanged);
     // 9 (D33 planner phase 1): seq_choice records (LEARNED_SEQUENCING=planner seats only; vectors and other records unchanged)
-    public static final int SCHEMA = 9;
+    // 10 (D22 v1.1): combat_attack "rules" ("v1" | "v1.1") and, under v1.1, "v11" {oppStartLife, early, raceUs, raceThem,
+    // raceWon, dropPoke, dropKey}; model "solver-d22v1.1"; new elig verdicts ok:race / ok:threat-trade (vectors unchanged)
+    public static final int SCHEMA = 10;
     public static final int SEATS = 4;
     /** Creature slots per seat, best first by power. */
     public static final int CREATURE_SLOTS = 6;

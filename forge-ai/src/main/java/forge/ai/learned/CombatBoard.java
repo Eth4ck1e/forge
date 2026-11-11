@@ -99,6 +99,8 @@ public final class CombatBoard {
             }
             b.input.seats.add(s);
         }
+        // D22 v1.1 rule 2: the opponents' summed starting life (eliminated ones included; visible)
+        for (Player p : game.getRegisteredPlayers()) if (p != ai && p.isOpponentOf(ai)) b.input.oppStartLife += p.getStartingLife();
         // issue #28: creatures that must attack ("attacks each combat if able", goad) but are missing from the stock
         // declaration are fixed too, on the defender of the engine's own legal attack (else their strongest requirement)
         Map<Card, GameEntity> legal = null;

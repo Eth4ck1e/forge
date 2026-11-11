@@ -51,6 +51,25 @@ public final class CombatSolver {
     public enum AttackRule { NONE, D22_V1 }
     /** PT = max(p,0)+max(t,0) (+cmdValue); D22 = keyword proxy + card-impact threat bonus (Python value_model 'd22'). */
     public enum ValueModel { PT, D22 }
+    /** Attack rule set on top of {@link AttackRule#D22_V1} (profile LEARNED_ATTACK_RULES). V1 = the D22 addendum of
+     * 2026-11-08 as is. V1_1 = the four rules Mitchell approved 2026-11-10 (D22 addendum 20:25): (1) heads-up race with
+     * a guard: when our race clock is not slower than the opponent's, the trade test is waived for unprotected
+     * creatures (survival stays hard); (2) no lone early pokes: with two or more opponents alive and their life above
+     * {@link Config#earlyLifeFrac} of their starting life, a line whose only attacker is one free creature is dropped
+     * unless it deals {@link Config#pokeMinDmg}, kills, or does not raise the visible swing-back; (3) key defenders
+     * (protected pieces that can block, without vigilance) attack only the top threat or a player the line kills;
+     * (4) the threat first: against the top threat an unprotected creature may take an even trade (the defender's
+     * value-best block costs it at least {@link Config#evenTradeFrac} of our loss and every killing block kills one of
+     * theirs). The threat-vs-bystander case is not a rule (D40 judge model). */
+    public enum RuleSet { V1, V1_1;
+        public String tag() { return this == V1 ? "v1" : "v1.1"; }
+        /** "v1.1" / "v11" / "v1_1" = V1_1; anything else = V1 */
+        public static RuleSet parse(String s) {
+            if (s == null) return V1;
+            String t = s.trim().toLowerCase(Locale.ROOT);
+            return t.equals("v1.1") || t.equals("v11") || t.equals("v1_1") ? V1_1 : V1;
+        }
+    }
 
     /** Parameters. Field defaults = the D22 preset decided by Mitchell (2026-11-08): SUM_ALL swing-back, hard
      * survival with lifeFloor 0 (stay alive against everyone swinging everything), no penalty, lethal on the last
@@ -97,9 +116,22 @@ public final class CombatSolver {
          * every opponent could die together (Python protected_kill_all; necessary condition, see Ctx.killAllPossible).
          * admissible() still lets a protected breaker through only on a line that eliminates every opponent. */
         public boolean protectedKillAll = true;
+        /** attack rule set (only with attackRule D22_V1); V1 = unchanged behaviour */
+        public RuleSet rules = RuleSet.V1;
+        /** v1.1 rule 2: "early" = two or more opponents alive and their summed life above this share of their summed
+         * starting life (eliminated opponents count 0; the review-card "early" stratum) */
+        public double earlyLifeFrac = 0.6;
+        /** v1.1 rule 2: a lone early attacker is still allowed when the line deals at least this much player damage */
+        public double pokeMinDmg = 5.0;
+        /** v1.1 rule 4: an even trade into the top threat = their value lost under their value-best block at least
+         * this share of ours */
+        public double evenTradeFrac = 0.75;
 
         /** D22 preset (same as new Config()) */
         public static Config d22() { return new Config(); }
+
+        /** D22 preset with the v1.1 rule set */
+        public static Config d22v11() { Config c = new Config(); c.rules = RuleSet.V1_1; return c; }
 
         /** train/combat_search.py SearchParams() as of the phase-1 parity fixture (pre strict-kill fix, pre d9230e6) */
         public static Config python() {
@@ -177,6 +209,9 @@ public final class CombatSolver {
          * (no home option), and gets no D22_V1 verdict. Not forced when banned from every target. {@link #fixed} wins.
          * Empty online (the hook fixes such creatures on the engine's defender instead). */
         public Set<Integer> mustAttack = new LinkedHashSet<>();
+        /** v1.1 rule 2: summed starting life of every opponent at the table, eliminated ones included (0 = unknown:
+         * the early test is off) */
+        public int oppStartLife;
     }
 
     /** One attacker's target: a player seat, or a planeswalker (pwId >= 0) controlled by that seat. */
@@ -245,6 +280,16 @@ public final class CombatSolver {
         /** {@link Input#compare} scored by the same objective (null when absent or not representable: an attacker the
          * solver does not know as eligible, or a target it does not know) */
         public Line compare;
+        /** rule set the line was chosen under ("v1" / "v1.1") */
+        public String rules = "v1";
+        /** v1.1 rule 1 (heads-up only, else -1): turns for our all-out attack (through their blocks) to kill the
+         * opponent, turns for their all-out swing (unblocked) to kill us (Integer.MAX_VALUE = never), race won */
+        public int raceUs = -1, raceThem = -1;
+        public boolean raceWon;
+        /** v1.1 rule 2: the board counts as early */
+        public boolean early;
+        /** v1.1: candidate lines dropped by rule 2 (lone early poke) and rule 3 (key defender off home) */
+        public int droppedPoke, droppedKey;
 
         public Map<Integer, String> describe() {
             Map<Integer, String> m = new LinkedHashMap<>();
@@ -440,7 +485,11 @@ public final class CombatSolver {
      * impact) only if no block (1..maxBlock blockers, or all legal blockers together) kills them; others if no single
      * legal blocker kills them, or the defender's best block costs them at least as much value as it costs us.
      */
-    static String attackEligible(Unit a, List<Unit> blockers, Config P) {
+    static String attackEligible(Unit a, List<Unit> blockers, Config P) { return attackEligible(a, blockers, P, false); }
+
+    /** as above; {@code topThreat} (v1.1 rule 4, the defender is the top-ranked threat): an unprotected creature the
+     * v1 trade test refuses may still attack on an even trade, "ok:threat-trade" (see {@link RuleSet}) */
+    static String attackEligible(Unit a, List<Unit> blockers, Config P, boolean topThreat) {
         List<Unit> legal = new ArrayList<>();
         for (Unit x : blockers) if (canBlock(x, a)) legal.add(x);
         if (legal.isEmpty()) return "ok:unblockable";
@@ -459,7 +508,14 @@ public final class CombatSolver {
             for (Unit d : dead) theirs += d.tv();
             if (ours - theirs > bo - bt + 1e-9) { bo = ours; bt = theirs; }
         }
-        return bt >= bo - 1e-9 ? "ok:trade" : "no:trade";
+        if (bt >= bo - 1e-9) return "ok:trade";
+        if (topThreat && P.rules == RuleSet.V1_1 && bt >= P.evenTradeFrac * bo - 1e-9) {
+            // rule 4: even trade into the top threat; no block may kill ours for nothing
+            boolean freeKill = false;
+            for (Object[] r : res) if ((Boolean) r[0] && ((List<?>) r[1]).isEmpty()) { freeKill = true; break; }
+            if (!freeKill) return "ok:threat-trade";
+        }
+        return "no:trade";
     }
 
     private static final Comparator<Unit> BY_VALUE_ID = (x, y) -> {
@@ -738,6 +794,12 @@ public final class CombatSolver {
             verdict = new String[groups.size()][];
             allowed = new boolean[groups.size()][];
             protGroup = new boolean[groups.size()];
+            threats();   // pure (blockers, eligible, opponents' attackers); before the verdicts for v1.1 rule 4
+            v11 = P.attackRule == AttackRule.D22_V1 && P.rules == RuleSet.V1_1;
+            if (v11) {
+                early = opps.size() >= 2 && in.oppStartLife > 0 && oppLife() > P.earlyLifeFrac * in.oppStartLife + 1e-9;
+                if (opps.size() == 1) race();
+            }
             if (P.attackRule == AttackRule.D22_V1) {
                 // lethal exemption (coordinator 2026-11-08 b): the rule applies to non-lethal attacks only. When some
                 // opponent could die this combat, groups keep their unfiltered options (protected groups only with one
@@ -750,7 +812,13 @@ public final class CombatSolver {
                     protGroup[gi] = u0.prot;
                     String[] vs = new String[T];
                     boolean[] ok = new boolean[T];
-                    for (int t = 0; t < T; t++) { vs[t] = attackEligible(u0, oppBlk.get(targets.get(t).seat), P); ok[t] = vs[t].startsWith("ok"); }
+                    for (int t = 0; t < T; t++) {
+                        vs[t] = attackEligible(u0, oppBlk.get(targets.get(t).seat), P, v11 && targets.get(t).seat == rank.get(0));
+                        // v1.1 rule 1: heads-up with the race won, unprotected creatures skip the trade test (the
+                        // survival guard still decides how many stay home)
+                        if (raceWon && !u0.prot && vs[t].startsWith("no")) vs[t] = "ok:race";
+                        ok[t] = vs[t].startsWith("ok");
+                    }
                     verdict[gi] = vs;
                     allowed[gi] = ok;
                     if (lethalExempt && (!u0.prot || opps.size() == 1 || killAll)) continue;
@@ -770,7 +838,63 @@ public final class CombatSolver {
                 if (m != null) for (List<int[]> os : options) for (int[] v : os) for (int t = 0; t < T && !can; t++) if (v[t] != 0 && m[t]) can = true;
                 reqActive.add(can);
             }
-            threats();
+        }
+
+        /** v1.1 */
+        boolean v11, early, raceWon;
+        int raceUs = -1, raceThem = -1;
+
+        private double oppLife() { double s = 0; for (Seat o : opps) s += Math.max(0, o.life); return s; }
+
+        private static int turnsTo(double need, double perTurn) {
+            if (need <= 0) return 0;
+            if (perTurn <= 0) return Integer.MAX_VALUE;
+            return (int) Math.ceil(need / perTurn - 1e-9);
+        }
+
+        /** v1.1 rule 1 (heads-up): our clock = every eligible creature attacking the opponent (fixed ones on their
+         * target), damage and poison through the deterministic defender's blocks; their clock = every creature of
+         * theirs that can attack next turn, unblocked. Race won = our clock is finite and not slower (we hit first). */
+        private void race() {
+            Seat o = opps.get(0);
+            List<int[]> key = new ArrayList<>();
+            for (int gi = 0; gi < groups.size(); gi++) {
+                int t = fixedT[gi] >= 0 ? fixedT[gi] : 0;
+                if (fixedT[gi] < 0 && banT.getOrDefault(groups.get(gi).get(0).id, Collections.emptySet()).contains(0)) continue;
+                if (targets.get(t).isPlaneswalker()) continue;
+                key.add(new int[]{gi, t, groups.get(gi).size()});
+            }
+            Sub all = makeSub(this, key, o.seat);
+            raceUs = all.elim ? 1 : Math.min(turnsTo(o.life, all.dmg), turnsTo(10 - o.poison, all.ps));
+            int d = 0, ps = 0;
+            for (Unit u : oppAtt.get(o.seat)) { if (u.inf) ps += u.potential(); else d += u.potential(); }
+            raceThem = Math.min(turnsTo(me.life, d), turnsTo(10 - me.poison, ps));
+            raceWon = raceUs != Integer.MAX_VALUE && raceUs <= raceThem;
+        }
+
+        /** v1.1 rules 2 and 3 on a whole line: 0 = keep, 1 = lone early poke, 2 = key defender off home */
+        int v11Drop(Profile p, Profile home) {
+            int free = 0, lone = 0;
+            for (int gi = 0; gi < groups.size(); gi++) {
+                boolean bound = fixedT[gi] >= 0 || isForced[gi];
+                for (int t = 0; t < T; t++) {
+                    int n = p.asg[gi][t];
+                    if (n == 0) continue;
+                    if (bound) { lone = -1; continue; }
+                    free += n;
+                    Unit u0 = groups.get(gi).get(0);
+                    if (u0.prot && groupBlocks[gi] && !u0.vig) {   // rule 3: a key defender
+                        Target tg = targets.get(t);
+                        boolean kill = !tg.isPlaneswalker() && p.elim.contains(tg.seat);
+                        if (tg.seat != rank.get(0) && !kill) return 2;
+                    }
+                }
+            }
+            if (early && lone == 0 && free == 1 && p.elim.isEmpty()) {   // rule 2: one free creature alone, no kill
+                double dmg = 0; for (double x : p.dmg.values()) dmg += x;
+                if (dmg < P.pokeMinDmg - 1e-9 && p.load > home.load + 1e-9) return 1;
+            }
+            return 0;
         }
 
         /** issue #28: per mustAttackAny entry, its targets as a mask (null = none of them is a target here) and whether
@@ -1312,6 +1436,18 @@ public final class CombatSolver {
             for (int i = 0; i < profs.size(); i++) if (ctx.admissibleReq(profs.get(i))) { c2.add(cands.get(i)); p2.add(profs.get(i)); }
             cands = c2; profs = p2;
         }
+        int dropPoke = 0, dropKey = 0;
+        if (ctx.v11 && !ctx.hasReq()) {   // v1.1 rules 2 and 3 (player-level requirements: v1 lines, see notes)
+            Profile home = evaluate(ctx, List.<int[][]>of(ctx.allHome())).get(0);
+            List<int[][]> c2 = new ArrayList<>(); List<Profile> p2 = new ArrayList<>();
+            for (int i = 0; i < profs.size(); i++) {
+                int d = ctx.v11Drop(profs.get(i), home);
+                if (d == 1) dropPoke++; else if (d == 2) dropKey++;
+                else { c2.add(cands.get(i)); p2.add(profs.get(i)); }
+            }
+            if (p2.isEmpty()) { c2.add(ctx.allHome()); p2.add(home); }   // cannot happen (all-home is kept), belt and braces
+            cands = c2; profs = p2;
+        }
         boolean reqMet = true;
         if (ctx.hasReq()) {   // issue #28: player-level attack requirements; keep every line if none meets them
             List<int[][]> c2 = new ArrayList<>(); List<Profile> p2 = new ArrayList<>();
@@ -1352,6 +1488,9 @@ public final class CombatSolver {
         res.playerReqUnmet = !reqMet;
         res.forced.addAll(ctx.forced);
         res.exempt.addAll(ctx.exempted(chosen));
+        res.rules = ctx.v11 ? RuleSet.V1_1.tag() : RuleSet.V1.tag();
+        res.raceUs = ctx.raceUs; res.raceThem = ctx.raceThem; res.raceWon = ctx.raceWon; res.early = ctx.early;
+        res.droppedPoke = dropPoke; res.droppedKey = dropKey;
         if (in.compare != null) {
             int[][] asg = new int[G][ctx.T];
             int found = 0;

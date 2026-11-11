@@ -45,6 +45,17 @@ public final class LearnedCombat {
 
     public static void setOverride(String mode) { override = mode; }
 
+    /** sim / JVM override of every Learned seat's LEARNED_ATTACK_RULES (v1 | v1.1; null = profile) */
+    public static volatile String rulesOverride = System.getProperty("learned.attackRules");
+
+    public static void setRulesOverride(String rules) { rulesOverride = rules; }
+
+    /** D22 v1.1 (2026-11-10): the seat's attack rule set (only used when its combat mode is solver or shadow) */
+    public static CombatSolver.RuleSet rules(AiController aic) {
+        String o = rulesOverride;
+        return CombatSolver.RuleSet.parse(o != null && !o.trim().isEmpty() ? o : aic.getProperty(AiProps.LEARNED_ATTACK_RULES));
+    }
+
     /** {@code -impact <path>}: the card-impact table (JSON from eval/card_impact.py, or CSV name,threat_shrunk) */
     public static synchronized void setImpactPath(String path) { impactPath = path; impact = null; impactTried = false; }
 
@@ -80,14 +91,23 @@ public final class LearnedCombat {
         if (SOLVER.equals(m) || SHADOW.equals(m)) {
             CardImpact imp = impact();
             sb.append(" preset=d22v1 (sum_all floor0 hard, lethal last/safe, strictKill, elimNoSwing, attackRule d22_v1, value d22)");
+            sb.append(" rules=").append(rules(aic).tag());
             sb.append(" impact=").append(imp == null ? "none (proxy value p+t+keywords; protected = commander only)" : imp.id());
         }
         System.out.println(sb);
     }
 
+    /** the D22 preset with the -impact table, rule set v1 */
     static CombatSolver.Config config() {
         CombatSolver.Config c = CombatSolver.Config.d22();
         c.impact = impact();
+        return c;
+    }
+
+    static CombatSolver.Config config(AiController aic) {
+        CombatSolver.Config c = CombatSolver.Config.d22();
+        c.impact = impact();
+        c.rules = rules(aic);
         return c;
     }
 
@@ -118,7 +138,7 @@ public final class LearnedCombat {
         else {
             if (stockRepresentable) board.input.compare = stockT;
             try {
-                res = CombatSolver.solve(board.input, config());
+                res = CombatSolver.solve(board.input, config(aic));
                 status = res == null ? "fallback:no-opponent" : "applied";
             } catch (RuntimeException ex) {
                 System.err.println("learned-ai combat solver failed: " + ex);
@@ -248,7 +268,17 @@ public final class LearnedCombat {
         StringBuilder sb = new StringBuilder(4096);
         PhaseType ph = ai.getGame().getPhaseHandler().getPhase();
         sb.append("\"seat\":").append(board.input.actingSeat).append(",\"turn\":").append(turn).append(",\"phase\":").append(ph == null ? 0 : ph.ordinal());
-        sb.append(",\"pilot\":\"").append(pilot).append("\",\"model\":\"solver-d22v1\"");
+        String rs = res != null ? res.rules : "v1";
+        sb.append(",\"pilot\":\"").append(pilot).append("\",\"model\":\"").append("v1".equals(rs) ? "solver-d22v1" : "solver-d22v1.1").append('"');
+        // schema 10 (D22 v1.1): the attack rule set and, under v1.1, the rule inputs the Python mirror needs
+        sb.append(",\"rules\":\"").append(rs).append('"');
+        if (res != null && !"v1".equals(rs)) {
+            sb.append(",\"v11\":{\"oppStartLife\":").append(board.input.oppStartLife).append(",\"early\":").append(res.early ? 1 : 0)
+              .append(",\"raceUs\":").append(res.raceUs == Integer.MAX_VALUE ? "null" : String.valueOf(res.raceUs))
+              .append(",\"raceThem\":").append(res.raceThem == Integer.MAX_VALUE ? "null" : String.valueOf(res.raceThem))
+              .append(",\"raceWon\":").append(res.raceWon ? 1 : 0)
+              .append(",\"dropPoke\":").append(res.droppedPoke).append(",\"dropKey\":").append(res.droppedKey).append('}');
+        }
         CardImpact imp = impact();
         sb.append(",\"impact\":\"").append(imp == null ? "proxy" : imp.id().replace("\"", "'")).append('"');
         sb.append(",\"status\":\"").append(status).append('"');
