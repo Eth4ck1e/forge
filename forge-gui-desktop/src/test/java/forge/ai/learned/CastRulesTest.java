@@ -160,6 +160,85 @@ public class CastRulesTest extends AITest {
         AssertJUnit.assertFalse("Doom Blade".equals(stockPick()));
     }
 
+    /** fresh per-game rule state (no tried casts), then the attack history: each [attacker, defender, card] */
+    private void history(Object[]... combats) {
+        LearnedCastRules.resetGame();
+        for (Object[] h : combats) {
+            Combat c = new Combat((Player) h[0]);
+            c.addAttacker((Card) h[2], (Player) h[1]);
+            game.getPhaseHandler().setCombat(c);
+            LearnedCastRules.tick(me);
+        }
+        game.getPhaseHandler().setCombat(null);
+    }
+
+    private Player top() {
+        return (Player) LearnedHooks.observing(me, true, () -> LearnedCastRules.threats(me)).get(0)[0];
+    }
+
+    @Test
+    public void precombatThreatAimsAtTheTopThreatNotTheLastAttacker() {
+        build();
+        addCards("Swamp", 2, me);
+        addCardToZone("Doom Blade", me, ZoneType.Hand);
+        Card lastAtt = bear(opps.get(0));                        // seat 2 attacked us last
+        Card angel = addCard("Serra Angel", opps.get(1)); angel.setSickness(false);
+        Card bears = addCard("Grizzly Bears", opps.get(1)); bears.setSickness(false);
+        addCard("Serra Angel", opps.get(1)).setSickness(false);
+        addCards("Plains", 6, opps.get(1));
+        Object[][] h = {{opps.get(0), me, lastAtt}, {opps.get(1), opps.get(2), angel}};   // seat 3 attacked seat 4
+        at(PhaseType.COMBAT_BEGIN, opps.get(1));
+        AssertJUnit.assertSame("seat 3 is the top threat", opps.get(1), top());
+        history(h);
+        AssertJUnit.assertNull("removal-precombat: seat 3 did not attack us last", act("removal-precombat"));
+        history(h);
+        SpellAbility sa = act("removal-precombat-threat");
+        AssertJUnit.assertNotNull("-threat fires on the top threat's turn", sa);
+        Card t = sa.getTargets().getFirstTargetedCard();
+        AssertJUnit.assertSame(opps.get(1), t.getController());
+        AssertJUnit.assertTrue("its best attacker, not the bears", t != bears && "Serra Angel".equals(t.getName()));
+        AssertJUnit.assertEquals("precombat:threat", LearnedCastRules.plannedWhy());
+        sa.resetTargets();
+        history(h);
+        sa = act("removal-precombat-either");
+        AssertJUnit.assertNotNull("-either fires on the top threat's turn", sa);
+        t = sa.getTargets().getFirstTargetedCard();
+        AssertJUnit.assertTrue(t != bears && "Serra Angel".equals(t.getName()));
+        AssertJUnit.assertEquals("precombat:threat", LearnedCastRules.plannedWhy());
+        sa.resetTargets();
+        // stock may not cast the ruled removal on its own
+        LearnedCastRules.setOverride("removal-precombat-threat");
+        AssertJUnit.assertFalse("Doom Blade".equals(stockPick()));
+    }
+
+    @Test
+    public void precombatThreatPassesWhenTheThreatHasNoAttacker() {
+        build();
+        addCards("Swamp", 2, me);
+        addCardToZone("Doom Blade", me, ZoneType.Hand);
+        Card lastAtt = bear(opps.get(0));                        // seat 2 attacked us last
+        for (int k = 0; k < 3; k++) addCard("Serra Angel", opps.get(1)).setSickness(true);   // none can attack this turn
+        addCards("Plains", 6, opps.get(1));
+        Object[][] h = {{opps.get(0), me, lastAtt}};
+        at(PhaseType.COMBAT_BEGIN, opps.get(1));
+        AssertJUnit.assertSame("seat 3 is the top threat", opps.get(1), top());
+        history(h);
+        AssertJUnit.assertNull("-threat: the top threat has no attacker, nothing this turn", act("removal-precombat-threat"));
+        history(h);
+        AssertJUnit.assertNull("-either: fallback finds no attacker at us either", act("removal-precombat-either"));
+        // seat 2's turn: not the top threat; -threat passes, -either falls back on attack history
+        at(PhaseType.COMBAT_BEGIN, opps.get(0));
+        AssertJUnit.assertSame(opps.get(1), top());
+        history(h);
+        AssertJUnit.assertNull("-threat: only on the top threat's turn", act("removal-precombat-threat"));
+        history(h);
+        SpellAbility sa = act("removal-precombat-either");
+        AssertJUnit.assertNotNull("-either falls back on whoever attacked us last", sa);
+        AssertJUnit.assertSame(lastAtt, sa.getTargets().getFirstTargetedCard());
+        AssertJUnit.assertEquals("precombat:history", LearnedCastRules.plannedWhy());
+        sa.resetTargets();
+    }
+
     @Test
     public void holdInstantsUntilTheEndStepBeforeOurTurn() {
         build();

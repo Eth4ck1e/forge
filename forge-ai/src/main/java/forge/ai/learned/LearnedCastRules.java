@@ -55,6 +55,14 @@ import forge.game.zone.ZoneType;
  * <li>{@code removal-precombat}: instant removal only at the beginning of combat on another player's turn, on that
  * player's best creature able to attack us, when that player is predicted to attack us (it attacked us in its last
  * combat; without history, we have the lowest life among its opponents); sorcery removal as in removal-combat.</li>
+ * <li>{@code removal-precombat-threat} (2026-11-11): instant removal only at the beginning of combat on the turn of the
+ * D17 top threat ({@link #threats}: stock board score, no low-life bonus), on that player's best creature able to
+ * attack (combat-solver d22 value: p+t+keywords, plus the card-impact bonus when {@code -impact} is loaded), whoever
+ * it attacked last; nothing on that turn when it has no such creature we can kill, nothing on other turns
+ * (why "precombat:threat"); sorcery removal as in removal-combat.</li>
+ * <li>{@code removal-precombat-either}: as removal-precombat-threat on the top threat's turn; otherwise (another
+ * player's turn, or the top threat has no killable attacker) the removal-precombat rule (why "precombat:history" /
+ * "precombat:lowlife"), so the two aiming rules can be compared.</li>
  * </ul>
  * Stock's candidate list is filtered ({@link #filter}, AiController) so stock never casts a ruled class outside its
  * window; ruled removal is cast only by the planner ({@link #act}), which sets its own single target. Removal the planner
@@ -62,9 +70,10 @@ import forge.game.zone.ZoneType;
  */
 public final class LearnedCastRules {
     public static final String OFF = "off", BASELINE = "baseline", HOLD = "hold-instants",
-            RCOMBAT = "removal-combat", RPRE = "removal-precombat";
+            RCOMBAT = "removal-combat", RPRE = "removal-precombat",
+            RPRE_THREAT = "removal-precombat-threat", RPRE_EITHER = "removal-precombat-either";
     public static final String HOOK = "cast_util";
-    static final List<String> NAMES = Arrays.asList(OFF, BASELINE, HOLD, RCOMBAT, RPRE);
+    static final List<String> NAMES = Arrays.asList(OFF, BASELINE, HOLD, RCOMBAT, RPRE, RPRE_THREAT, RPRE_EITHER);
     /** sim / JVM override of every Learned seat (null = profile) */
     public static volatile String override = System.getProperty("learned.castRules");
     /** per-seat override (seat number as in SIMRESULT, 1-based); wins over {@link #override} */
@@ -335,6 +344,30 @@ public final class LearnedCastRules {
     static Plan pickRemoval(Player ai, String cls, List<Card> targets, String why) {
         List<Card> order = new ArrayList<>(targets);
         order.sort((x, y) -> Integer.compare(value(y), value(x)));
+        return pickRemovalOrdered(ai, cls, order, why);
+    }
+
+    /** combat-solver d22 value of a creature: p+t + keyword proxy (+ commander), + card-impact bonus when loaded */
+    static double attackerValue(Card c) {
+        CombatSolver.Config cfg = CombatSolver.Config.d22();
+        CombatSolver.Unit u = CombatSolver.makeUnit(CombatBoard.creature(c), LearnedHooks.seatNumber(c.getController()), cfg.cmdValue);
+        return CombatSolver.d22Value(u, LearnedCombat.impact(), cfg);
+    }
+
+    /** removal-precombat-threat/-either: the top threat's best killable creature able to attack, on its turn; or null */
+    static Plan threatAttackerPlan(Player ai, Window w) {
+        List<Object[]> th = threats(ai);
+        if (th.isEmpty() || th.get(0)[0] != w.active) return null;
+        List<Card> tg = new ArrayList<>();
+        for (Card c : w.active.getCreaturesInPlay()) if (c.getNetCombatDamage() > 0 && CombatUtil.canAttack(c)) tg.add(c);
+        if (tg.isEmpty()) return null;
+        Map<Integer, Double> v = new HashMap<>();
+        for (Card c : tg) v.put(c.getId(), attackerValue(c));
+        tg.sort((x, y) -> { int k = Double.compare(v.get(y.getId()), v.get(x.getId())); return k != 0 ? k : Integer.compare(x.getId(), y.getId()); });
+        return pickRemovalOrdered(ai, "removal-instant", tg, "precombat:threat");
+    }
+
+    static Plan pickRemovalOrdered(Player ai, String cls, List<Card> order, String why) {
         List<SpellAbility> spells = new ArrayList<>();
         for (SpellAbility sa : castable(ai)) {
             Player prev = sa.getActivatingPlayer();
@@ -408,7 +441,13 @@ public final class LearnedCastRules {
             if (w.step == PhaseType.COMBAT_DECLARE_BLOCKERS && !w.unblockedAtMe.isEmpty()) return pickRemoval(ai, "removal-instant", w.unblockedAtMe, "combat:unblocked");
             return null;
         }
-        if (r == RPRE) {
+        if (r == RPRE_THREAT || r == RPRE_EITHER) {
+            if (w.step != PhaseType.COMBAT_BEGIN || w.active == null) return null;
+            Plan p = threatAttackerPlan(ai, w);
+            if (p != null || r == RPRE_THREAT) return p;
+            // removal-precombat-either: fall back on the attack-history rule below
+        }
+        if (r == RPRE || r == RPRE_EITHER) {
             if (w.step != PhaseType.COMBAT_BEGIN || w.active == null) return null;
             String pred = predictsAttack(ai, w.active);
             if (pred == null) return null;
@@ -483,6 +522,9 @@ public final class LearnedCastRules {
     }
 
     private static final ThreadLocal<String> PLAN_WHY = new ThreadLocal<>();
+
+    /** for tests: the aiming rule ("why") of the planner play just made on this thread, not consumed */
+    static String plannedWhy() { return PLAN_WHY.get(); }
 
     private static void notePlan(Player ai, SpellAbility sa, String why) {
         PLAN_WHY.set(why);
