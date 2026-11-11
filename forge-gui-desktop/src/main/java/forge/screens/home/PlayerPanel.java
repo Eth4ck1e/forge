@@ -542,7 +542,7 @@ public class PlayerPanel extends FPanel {
             closeBtn.requestFocusInWindow();
             final Object selection = comboBox.getSelectedItem();
 
-            if (selection != null) {
+            if (selection != null && !settingAiProfile) {   // learned-ai: programmatic selection is not a user pick
                 setAiProfile(forge.ai.learned.SeatProfiles.profileOfLabel(selection.toString()));   // learned-ai: label -> profile
                 lobby.changePlayerFocus(index);
                 lobby.firePlayerChangeListener(index);
@@ -1003,10 +1003,19 @@ public class PlayerPanel extends FPanel {
         this.deckChooser = deckChooser;
     }
 
+    // learned-ai: set while setAiProfile selects the combo item, so its listener does not fire lobby focus/change
+    // events (a preset slot profile selected it from the constructor, before the panel was in VLobby's list)
+    private boolean settingAiProfile = false;
+
     public void setAiProfile(String aiProfile) {
         this.aiProfile = aiProfile;
         if (aiProfile != null) {
-            aiPickerComboBox.setSelectedItem(forge.ai.learned.SeatProfiles.pickerLabel(aiProfile));   // learned-ai: labels
+            settingAiProfile = true;
+            try {
+                aiPickerComboBox.setSelectedItem(forge.ai.learned.SeatProfiles.pickerLabel(aiProfile));   // learned-ai: labels
+            } finally {
+                settingAiProfile = false;
+            }
         }
     }
 

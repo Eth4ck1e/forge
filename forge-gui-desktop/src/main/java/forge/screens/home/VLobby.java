@@ -336,7 +336,8 @@ public class VLobby implements ILobbyView {
     }
 
     public void focusOnAvatar() {
-        getPlayerPanelWithFocus().focusOnAvatar();
+        final PlayerPanel focused = getPlayerPanelWithFocus();   // learned-ai: may be null (guard)
+        if (focused != null) focused.focusOnAvatar();
     }
 
     private PlayerPanel getPlayerPanel(int slot) {
@@ -948,7 +949,8 @@ public class VLobby implements ILobbyView {
         return playerPanels;
     }
     private PlayerPanel getPlayerPanelWithFocus() {
-        return getPlayerPanels().get(playerWithFocus);
+        // learned-ai: null for an index past the list (a panel not registered yet) instead of throwing
+        return playerWithFocus >= 0 && playerWithFocus < getPlayerPanels().size() ? getPlayerPanels().get(playerWithFocus) : null;
     }
     boolean hasFocus(final int iPlayer) {
         return iPlayer == playerWithFocus;
@@ -989,6 +991,9 @@ public class VLobby implements ILobbyView {
         }
         playerWithFocus = newFocusOwner;
         final PlayerPanel newFocus = getPlayerPanelWithFocus();
+        if (newFocus == null) {
+            return;   // learned-ai: guard, see getPlayerPanelWithFocus
+        }
         newFocus.setFocused(true);
 
         playersScroll.getViewport().scrollRectToVisible(newFocus.getBounds());
