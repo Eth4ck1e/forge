@@ -3,7 +3,9 @@ package forge.ai.learned;
 import java.io.File;
 import java.io.IOException;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Date;
+import java.util.List;
 
 import forge.ai.LobbyPlayerAi;
 import forge.ai.PlayerControllerAi;
@@ -46,6 +48,7 @@ public final class LiveLog {
             LearnLog.beginGame(1, started);
             current = f;
             System.out.println("SIMNOTE learned live learnlog " + f.getAbsolutePath());
+            System.out.println("SIMNOTE learned " + LiveUpload.gamesLine());   // D46: games played k / N
         } catch (IOException | RuntimeException e) {
             current = null;
             System.out.println("SIMNOTE learned live learnlog failed: " + e);
@@ -55,16 +58,52 @@ public final class LiveLog {
     /** writes the game_result record and closes the file */
     public static synchronized void endGame(Game game) {
         if (current == null) return;
+        long ended = System.currentTimeMillis();
+        List<LiveUpload.Seat> seats = null;
+        int turns = 0;
+        String reason = null;
         try {
-            LearnLog.raw("game_result", resultJson(game, System.currentTimeMillis() - started));
+            LearnLog.raw("game_result", resultJson(game, ended - started));
             LearnLog.endGame();
+            seats = seats(game);
+            turns = game.getPhaseHandler() == null ? 0 : game.getPhaseHandler().getTurn();
+            reason = game.getOutcome() == null ? null : String.valueOf(game.getOutcome().getWinCondition());
         } catch (RuntimeException e) {
             System.out.println("SIMNOTE learned live learnlog result failed: " + e);
         } finally {
             LearnLog.close();
             System.out.println("SIMNOTE learned live learnlog closed " + current.getAbsolutePath());
-            current = null;
         }
+        File f = current;
+        current = null;
+        if (LiveUpload.url() == null) return;   // D46: upload only when configured
+        try {
+            String m = LiveUpload.manifest(LearnedConfig.build(), System.getProperty("learned.configId"), System.getProperty("learned.playerId"),
+                    started, started, ended, turns, reason, seats == null ? new ArrayList<>() : seats, LiveUpload.sha256(f), f.length());
+            LiveUpload.gameClosed(f, m);
+        } catch (IOException | RuntimeException e) {
+            System.out.println("SIMNOTE learned upload could not build manifest for " + f + ": " + e);
+        }
+    }
+
+    /** manifest seats with places (LiveUpload.places) */
+    static List<LiveUpload.Seat> seats(Game g) {
+        List<LiveUpload.Seat> out = new ArrayList<>();
+        List<Integer> turns = new ArrayList<>();
+        for (Player p : g.getRegisteredPlayers()) {
+            LiveUpload.Seat s = new LiveUpload.Seat();
+            s.name = p.getName();
+            Deck d = p.getRegisteredPlayer() == null ? null : p.getRegisteredPlayer().getDeck();
+            s.deck = d == null ? null : d.getName();
+            s.profile = p.getLobbyPlayer() instanceof LobbyPlayerAi ? ((LobbyPlayerAi) p.getLobbyPlayer()).getAiProfile() : null;
+            s.human = isHuman(p);
+            PlayerOutcome po = p.getOutcome();
+            s.result = po == null ? "unknown" : po.hasWon() ? "win" : po.lossState == GameLossReason.IntentionalDraw ? "draw" : "loss";
+            out.add(s);
+            turns.add(p.getOutcomeTurn());
+        }
+        LiveUpload.places(out, turns);
+        return out;
     }
 
     /** a human (non-AI) seat: its hidden zones are never recorded */

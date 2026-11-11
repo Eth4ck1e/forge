@@ -66,7 +66,12 @@ public final class SeatProfiles {
 
     /** the raw learned.seatDecks entry for this seat (file stem or precon name), or null */
     public static String deckSpecFor(int seat) {
-        return parseSpec(System.getProperty("learned.seatDecks")).get(seat);
+        String d = parseSpec(System.getProperty("learned.seatDecks")).get(seat);
+        if (d == null && seat == 1) {   // D46: -Dlearned.humanDeck / config humanDeck = slot 1's deck
+            String h = System.getProperty("learned.humanDeck");
+            if (h != null && !h.trim().isEmpty()) d = h.trim();
+        }
+        return d;
     }
 
     /** the fork shows the per-slot AI picker unless -Dlearned.aiPicker=false; stock preference still enables it */

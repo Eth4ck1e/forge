@@ -91,10 +91,12 @@ public final class Main {
 
         // Start splash screen first, then data models, then controller.
         if (args.length == 0) {
+            forge.ai.learned.LearnedConfig.apply();   // learned-ai D46: -Dlearned.config=<learned-play.properties>
             Singletons.initializeOnce(true);
 
             // Controller can now step in and take over.
             Singletons.getControl().initialize();
+            learnedFriendsStartup();   // learned-ai D46
             return;
         }
 
@@ -126,6 +128,18 @@ public final class Main {
      * The switch's {@code default} arm also stays on the console, but an unrecognised argument is
      * not a mode and only prints usage, so it is deliberately not listed here.
      */
+    /** learned-ai D46: once-per-install upload notice (when uploadUrl is set), games line, outbox retry */
+    private static void learnedFriendsStartup() {
+        if (forge.ai.learned.LiveUpload.url() == null) return;
+        System.out.println("SIMNOTE learned " + forge.ai.learned.LiveUpload.gamesLine());
+        if (forge.ai.learned.LiveUpload.noticeDue()) {
+            final String text = forge.ai.learned.LiveUpload.noticeText();
+            javax.swing.SwingUtilities.invokeLater(() -> javax.swing.JOptionPane.showMessageDialog(null, text,
+                    "Forge learned-AI build", javax.swing.JOptionPane.INFORMATION_MESSAGE));
+        }
+        forge.ai.learned.LiveUpload.retryOutboxAsync();
+    }
+
     public static boolean isCommandLineMode(final String mode) {
         return "sim".equals(mode) || "parse".equals(mode) || "server".equals(mode);
     }
