@@ -31,7 +31,9 @@ public final class Features {
     // 9 (D33 planner phase 1): seq_choice records (LEARNED_SEQUENCING=planner seats only; vectors and other records unchanged)
     // 10 (D22 v1.1): combat_attack "rules" ("v1" | "v1.1") and, under v1.1, "v11" {oppStartLife, early, raceUs, raceThem,
     // raceWon, dropPoke, dropKey}; model "solver-d22v1.1"; new elig verdicts ok:race / ok:threat-trade (vectors unchanged)
-    public static final int SCHEMA = 10;
+    // 11 (D44): cast_util records (LEARNED_CAST_RULES seats); seq_choice "pilot" may be "planner" and gains "castRules"
+    // (vectors and other records unchanged)
+    public static final int SCHEMA = 11;
     public static final int SEATS = 4;
     /** Creature slots per seat, best first by power. */
     public static final int CREATURE_SLOTS = 6;

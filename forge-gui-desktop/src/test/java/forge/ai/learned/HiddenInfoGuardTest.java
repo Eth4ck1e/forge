@@ -30,7 +30,7 @@ import forge.game.zone.ZoneType;
 /**
  * learned-ai D39 (audit rec. 1): hidden information never reaches a learned input. Every feature vector and record the
  * acting seat produces (spell_choice x / xa / schema-5 mana-hand fields, attack_target candidates, combat_snapshot,
- * CombatBoard solver input, turn_end, the D33 planner's seq_choice context and candidates) must be identical after the opponents' hand and library contents are exchanged
+ * CombatBoard solver input, turn_end, the D33 planner's seq_choice context and candidates, the D44 cast_util record) must be identical after the opponents' hand and library contents are exchanged
  * (sizes kept), their libraries reordered, and our own library reordered. A control checks the test is sensitive:
  * exchanging our own hand with our library does change the record. Rec. 2: a face-down creature has no name on the
  * solver board.
@@ -107,6 +107,8 @@ public class HiddenInfoGuardTest extends AITest {
         CombatBoard b = CombatBoard.build(me, combat);
         b.input.eligibility = null;
         out.add("board " + gson.toJson(b.input));
+        // D44: the cast_util record of casting the bolt now (window, class, threat ranking, target roles, outcome)
+        out.add("cast_util " + LearnedHooks.observing(me, true, () -> LearnedCastRules.preview(me, LearnedCastRules.RCOMBAT, bolt)));
         return out;
     }
 
@@ -122,7 +124,7 @@ public class HiddenInfoGuardTest extends AITest {
         build();
         List<String> before = observe();
         AssertJUnit.assertEquals(before, observe());   // observing twice changes nothing
-        AssertJUnit.assertTrue(before.get(before.size() - 3).contains("\"hand\""));
+        AssertJUnit.assertTrue(before.get(before.size() - 4).contains("\"hand\""));
 
         for (Player o : opps) {
             exchange(o, ZoneType.Hand, ZoneType.Library);

@@ -1930,6 +1930,7 @@ public class AiController {
         skipped = saList.stream().filter(SpellAbility::isSkip).collect(Collectors.toList());
         if (!skipped.isEmpty())
             saList.removeAll(skipped);
+        forge.ai.learned.LearnedCastRules.filter(this, player, saList);   // learned-ai D44: a LEARNED_CAST_RULES seat drops plays outside its windows (no-op when off)
         if (flatMonteCarloActive() && game.getStack().isEmpty()) {
             final SpellAbility sure = deckPlan(player).combos.sureMadnessPlay(player, saList);
             if (sure != null) {

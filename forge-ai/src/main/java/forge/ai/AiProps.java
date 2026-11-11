@@ -168,6 +168,7 @@ public enum AiProps {
     LEARNED_SPELL_CHOICE("false"),
     LEARNED_MODEL(""),
     LEARNED_SEQUENCING("off"), // learned-ai D33: "planner" = the Sequencing planner enumerates instant-speed plays at every priority (phase 1: seq_choice records only, play unchanged)
+    LEARNED_CAST_RULES("off"), // learned-ai D44: casting-window rule set of the D33 planner: off | baseline | hold-instants | removal-combat | removal-precombat
     LEARNED_COMBAT("stock"), // learned-ai D22 phase 2: "solver" = attack declaration by forge.ai.learned.CombatSolver; "shadow" = stock plays, solver logged
     LEARNED_ATTACK_RULES("v1"), // learned-ai D22 v1.1: the solver's attack rule set, "v1" (default) or "v1.1" (the four rules of 2026-11-10)
     // Sampling efficiency and deck-agnostic valuation. Setting PRUNING/CATEGORY_HOLD/ADAPTIVE_PLAYOUT to false and

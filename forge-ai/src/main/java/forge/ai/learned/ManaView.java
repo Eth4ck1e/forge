@@ -456,6 +456,7 @@ public final class ManaView {
      */
     public static void onCast(SpellAbility sp) {
         if (!LearnLog.enabled() || sp == null) return;
+        try { LearnedCastRules.onCast(sp); } catch (RuntimeException e) { error("cast_util onCast", e); }   // D44 (schema 11)
         Player p = sp.getActivatingPlayer();
         if (p == null) return;
         Game game = p.getGame();

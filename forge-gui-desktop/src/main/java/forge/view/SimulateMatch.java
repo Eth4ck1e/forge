@@ -259,6 +259,11 @@ public class SimulateMatch {
             forge.ai.learned.LearnedSequencing.setOverride(params.get("seq").get(0));
             System.out.println("SIMNOTE learned sequencing override " + params.get("seq").get(0));
         }
+        // learned-ai D44: -castrules <name> | seat<N>:<name>[,...] overrides LEARNED_CAST_RULES of Learned seats (= -Dlearned.castRules)
+        if (params.containsKey("castrules")) {
+            forge.ai.learned.LearnedCastRules.setOverride(String.join(",", params.get("castrules")));
+            System.out.println("SIMNOTE learned cast rules override " + String.join(",", params.get("castrules")));
+        }
         if (params.containsKey("spellcands")) {
             forge.ai.learned.LearnedHooks.spellCandidates = Integer.parseInt(params.get("spellcands").get(0));
         }
@@ -382,6 +387,7 @@ public class SimulateMatch {
         System.out.println("\tcombat - stock|solver|shadow: attack declaration of every Learned seat (shadow = stock plays, the solver is logged with status shadow) (overrides LEARNED_COMBAT; same as -Dlearned.combat)");
         System.out.println("\tattackrules - v1|v1.1: attack rule set of the combat solver of every Learned seat (learned-ai D22 v1.1; overrides LEARNED_ATTACK_RULES; same as -Dlearned.attackRules)");
         System.out.println("\tseq - off|planner: Sequencing planner of every Learned seat (planner = seq_choice records at every priority, phase 1 observation only) (overrides LEARNED_SEQUENCING; same as -Dlearned.sequencing)");
+        System.out.println("\tcastrules - [seat<N>:]off|baseline|hold-instants|removal-combat|removal-precombat (comma separated): casting-window rule set of Learned seats (learned-ai D44; overrides LEARNED_CAST_RULES; same as -Dlearned.castRules)");
         System.out.println("\timpact - card-impact table (eval/card_impact.py JSON, or CSV name,threat_shrunk) for the combat solver's values and protected pieces");
         System.out.println("\tr - Turn cap in table rounds (rounds * players engine turns); games reaching it are recorded as draws. One SIMRESULT json line is printed per game.");
     }

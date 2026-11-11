@@ -104,30 +104,47 @@ public final class LearnedSequencing {
      * observation. Returns exactly what {@code decide} returns.
      */
     public static List<SpellAbility> observe(Player ai, java.util.function.Supplier<List<SpellAbility>> decide) {
-        if (!active(ai)) return decide.get();
+        final String rules = LearnedCastRules.rules(ai);   // D44: "off" unless LEARNED_CAST_RULES / -castrules
+        final boolean obs = active(ai);
+        if (!obs && rules == LearnedCastRules.OFF) return decide.get();
+        if (rules != LearnedCastRules.OFF) LearnedCastRules.tick(ai);
         final long t0 = System.nanoTime();
-        final Pre pre;
-        try {
-            pre = LearnedHooks.observing(ai, true, () -> pre(ai));
-        } catch (RuntimeException e) {
-            ManaView.errorNote("seq_choice pre", e);
-            return decide.get();
+        Pre pre = null;
+        if (obs) {
+            try {
+                pre = LearnedHooks.observing(ai, true, () -> pre(ai));
+            } catch (RuntimeException e) {
+                ManaView.errorNote("seq_choice pre", e);
+            }
         }
         final long t1 = System.nanoTime();
-        CAPTURE.set(new ArrayList<>());
+        // D44 phase 2: the planner acts for the rule set's windows; otherwise the seat decides (rule-filtered)
+        final SpellAbility planned = LearnedCastRules.act(ai, rules);
         List<Object[]> stockList = null;
         List<SpellAbility> result;
-        try {
+        if (planned != null) {
+            result = new ArrayList<>();
+            result.add(planned);
+        } else if (pre != null) {
+            CAPTURE.set(new ArrayList<>());
+            try {
+                result = decide.get();
+                stockList = CAPTURE.get();
+            } finally {
+                CAPTURE.remove();
+            }
+        } else {
             result = decide.get();
-            stockList = CAPTURE.get();
-        } finally {
-            CAPTURE.remove();
         }
+        if (rules != LearnedCastRules.OFF) LearnedCastRules.noteDecision(ai, rules, result, planned != null);
+        if (pre == null) return result;
         final long t2 = System.nanoTime();
+        final Pre pr = pre;
         final List<Object[]> sl = stockList;
         final List<SpellAbility> res = result;
+        final String pilot = planned != null ? "planner" : "observe";
         try {
-            String body = LearnedHooks.observing(ai, true, () -> post(ai, pre, sl, res, (t1 - t0)));
+            String body = LearnedHooks.observing(ai, true, () -> post(ai, pr, sl, res, (t1 - t0), pilot, rules));
             if (body != null) LearnLog.raw(HOOK, body);
         } catch (RuntimeException e) {
             ManaView.errorNote("seq_choice post", e);
@@ -521,6 +538,11 @@ public final class LearnedSequencing {
 
     /** the record body, or null when nothing was on offer (no candidate, no stock list, the seat passed) */
     static String post(Player ai, Pre pre, List<Object[]> stockList, List<SpellAbility> result, long ns) {
+        return post(ai, pre, stockList, result, ns, "observe", LearnedCastRules.OFF);
+    }
+
+    /** as above; {@code pilot} "planner" when the D44 planner made the play, {@code rules} the seat's cast rule set */
+    static String post(Player ai, Pre pre, List<Object[]> stockList, List<SpellAbility> result, long ns, String pilot, String rules) {
         SpellAbility played = result == null || result.isEmpty() ? null : result.get(0);
         boolean stockOffered = stockList != null && !stockList.isEmpty();
         long[] pr;
@@ -555,7 +577,9 @@ public final class LearnedSequencing {
             try { ManaView.candJson(ci, ai, played); } catch (RuntimeException e) { ci.setLength(0); ci.append("{\"card\":"); ManaView.str(ci, h == null ? null : h.getName()); ci.append('}'); }
             sb.append(ci).append('}');
         }
-        sb.append(",\"pilot\":\"observe\",\"ns\":").append(ns);
+        sb.append(",\"pilot\":\"").append(pilot).append('"');
+        if (!LearnedCastRules.OFF.equals(rules)) sb.append(",\"castRules\":\"").append(rules).append('"');   // D44 (schema 11)
+        sb.append(",\"ns\":").append(ns);
         synchronized (LearnedSequencing.class) { pr[0] = 0; pr[2]++; }
         return sb.toString();
     }
