@@ -310,6 +310,13 @@ public final class ManaView {
         sb.append(",\"castable\":"); strs(sb, castable);
         sb.append(",\"candMana\":[").append(cm).append(approved.isEmpty() ? "" : ",").append("null]");
         sb.append(",\"candInfo\":[").append(cd).append(approved.isEmpty() ? "" : ",").append("null]");
+        // schema 12 (D45): roles of every card candInfo names, battlefield role counts of every living seat
+        List<Card> named = new ArrayList<>();
+        for (SpellAbility sa : approved) {
+            try { candCards(ai, sa, named); } catch (RuntimeException e) { error("roles " + sa, e); }
+        }
+        CardRoles.rolesJson(sb, named);
+        CardRoles.roleCountsJson(sb, Features.seatsFrom(ai));
         out.json = sb.toString();
         return out;
     }
@@ -377,6 +384,25 @@ public final class ManaView {
         sb.append('}');
     }
 
+    /** the cards a candInfo entry names (host, visible target cards, hosts of target spells), as {@link #candJson} walks them */
+    static void candCards(Player ai, SpellAbility sa, List<Card> out) {
+        if (sa.getHostCard() != null) out.add(sa.getHostCard());
+        List<SpellAbility> nodes = new ArrayList<>();
+        for (SpellAbility s = sa; s != null; s = s.getSubAbility()) nodes.add(s);
+        List<? extends SpellAbility> chosen = sa.getChosenList();
+        if (chosen != null && !sa.isSpell()) {
+            for (SpellAbility m : chosen) for (SpellAbility s = m; s != null; s = s.getSubAbility()) nodes.add(s);
+        }
+        for (SpellAbility s : nodes) {
+            if (!s.usesTargeting() || s.getTargets() == null) continue;
+            for (Card c : s.getTargets().getTargetCards()) {
+                boolean hidden = c.isFaceDown() || (c.getZone() != null && c.getZone().getZoneType().isHidden() && c.getOwner() != ai);
+                if (!hidden) out.add(c);
+            }
+            for (SpellAbility t : s.getTargets().getTargetSpells()) if (t.getHostCard() != null && !t.getHostCard().isFaceDown()) out.add(t.getHostCard());
+        }
+    }
+
     // ---- raw records ------------------------------------------------------------------------------------------------
     /** {@code turn_end} body for {@code p} (its own hand only); call from a saved state */
     static String turnEndJson(Player p, int turn, boolean active) {
@@ -404,6 +430,16 @@ public final class ManaView {
         sb.append(",\"floatLostCol\":"); ints(sb, lost == null ? new int[6] : java.util.Arrays.copyOfRange(lost, 1, 7));
         sb.append(",\"casts\":").append(p.getSpellsCastThisTurn()).append(",\"landsPlayed\":").append(p.getLandsPlayedThisTurn());
         sb.append(",\"decisions\":").append(decisions);
+        // schema 12 (D45): roles of the seat's own battlefield (map by id) and hand (parallel to "hand"), its role counts
+        CardRoles.rolesJson(sb, p.getCardsIn(ZoneType.Battlefield));
+        sb.append(",\"handRoles\":[");
+        boolean firstH = true;
+        for (Card c : p.getCardsIn(ZoneType.Hand)) {
+            if (!firstH) sb.append(','); firstH = false;
+            strs(sb, CardRoles.of(c));
+        }
+        sb.append(']');
+        CardRoles.roleCountsJson(sb, java.util.Collections.singletonList(p));
         return sb.toString();
     }
 

@@ -52,7 +52,7 @@ public final class LearnLog {
         sb.append(",\"spell_choice\":"); strings(sb, java.util.Arrays.asList(Features.SPELL_CANDIDATE));
         sb.append("},\"hooks\":[\"attack_target\",\"spell_choice\"]");
         sb.append(",\"spellLegacy\":").append(Features.SPELL_LEGACY);   // schema 5: spell_choice xa columns of schema 2-4
-        sb.append(",\"raw\":[\"combat_snapshot\",\"combat_damage\",\"combat_result\",\"combat_attack\",\"turn_end\",\"mana_payment\",\"mana_lost\",\"seq_choice\",\"cast_util\"]}\n");
+        sb.append(",\"raw\":[\"combat_snapshot\",\"combat_damage\",\"combat_result\",\"combat_attack\",\"turn_end\",\"mana_payment\",\"mana_lost\",\"seq_choice\",\"cast_util\",\"game_result\"]}\n");
         out.write(sb.toString());
         if (!hooked) { Runtime.getRuntime().addShutdownHook(new Thread(LearnLog::close)); hooked = true; }
         forge.game.combat.Combat.learnedDamageObserver = CombatSnapshot::damage;   // D19: "combat_damage" records

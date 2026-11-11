@@ -107,6 +107,11 @@ public class HiddenInfoGuardTest extends AITest {
         CombatBoard b = CombatBoard.build(me, combat);
         b.input.eligibility = null;
         out.add("board " + gson.toJson(b.input));
+        // D45 (schema 12): the combat_attack roles fragment over the board's cards and the seats' role counts
+        StringBuilder roles = new StringBuilder();
+        CardRoles.rolesJson(roles, b.cards.values());
+        CardRoles.roleCountsJson(roles, b.players.values());
+        out.add("roles " + roles);
         // D44: the cast_util record of casting the bolt now (window, class, threat ranking, target roles, outcome)
         out.add("cast_util " + LearnedHooks.observing(me, true, () -> LearnedCastRules.preview(me, LearnedCastRules.RCOMBAT, bolt)));
         return out;
@@ -124,7 +129,7 @@ public class HiddenInfoGuardTest extends AITest {
         build();
         List<String> before = observe();
         AssertJUnit.assertEquals(before, observe());   // observing twice changes nothing
-        AssertJUnit.assertTrue(before.get(before.size() - 4).contains("\"hand\""));
+        AssertJUnit.assertTrue(before.get(before.size() - 5).contains("\"hand\""));
 
         for (Player o : opps) {
             exchange(o, ZoneType.Hand, ZoneType.Library);

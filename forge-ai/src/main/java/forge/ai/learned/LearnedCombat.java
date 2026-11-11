@@ -339,6 +339,10 @@ public final class LearnedCombat {
             sb.append("}}");
         }
         sb.append(']');
+        // schema 12 (D45): roles of every card on the solver board (creatures and planeswalkers, face-down ones without
+        // roles), battlefield role counts of every living seat on the board
+        CardRoles.rolesJson(sb, board.cards.values());
+        CardRoles.roleCountsJson(sb, board.players.values());
         return sb.toString();
     }
 }

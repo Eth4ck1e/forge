@@ -33,7 +33,10 @@ public final class Features {
     // raceWon, dropPoke, dropKey}; model "solver-d22v1.1"; new elig verdicts ok:race / ok:threat-trade (vectors unchanged)
     // 11 (D44): cast_util records (LEARNED_CAST_RULES seats); seq_choice "pilot" may be "planner" and gains "castRules"
     // (vectors and other records unchanged)
-    public static final int SCHEMA = 11;
+    // 12 (D45): card roles (CardRoles): spell_choice and combat_attack gain "roles" {cardId: [role...]} for the cards they
+    // name and "roleCounts" {seat: {n, role: count}} per living seat; turn_end gains "roles" (own battlefield),
+    // "handRoles" (parallel to "hand") and "roleCounts" (own seat); vectors unchanged
+    public static final int SCHEMA = 12;
     public static final int SEATS = 4;
     /** Creature slots per seat, best first by power. */
     public static final int CREATURE_SLOTS = 6;
